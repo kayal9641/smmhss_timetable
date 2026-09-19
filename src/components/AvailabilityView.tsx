@@ -81,6 +81,11 @@ export const AvailabilityView: React.FC<AvailabilityViewProps> = ({
     setTimeout(() => setSavedNotice(false), 2500);
   };
 
+  const activeDays = Array.isArray(timings?.active_days) && timings.active_days.length > 0
+    ? timings.active_days
+    : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const totalPeriods = timings?.total_periods || 8;
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -147,7 +152,7 @@ export const AvailabilityView: React.FC<AvailabilityViewProps> = ({
           <thead>
             <tr className="border-b border-slate-200 bg-slate-50/90 font-semibold text-slate-700">
               <th className="p-3 w-32 border-r border-slate-200">Period</th>
-              {timings.active_days.map((day) => (
+              {activeDays.map((day) => (
                 <th key={day} className="p-3 text-center border-r border-slate-200 last:border-r-0 font-bold">
                   {day}
                 </th>
@@ -155,7 +160,7 @@ export const AvailabilityView: React.FC<AvailabilityViewProps> = ({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {Array.from({ length: timings.total_periods }, (_, i) => i + 1).map((p) => {
+            {Array.from({ length: totalPeriods }, (_, i) => i + 1).map((p) => {
               const isBreak = p === 3 || p === 7;
               const isLunch = p === 5;
 
@@ -165,7 +170,7 @@ export const AvailabilityView: React.FC<AvailabilityViewProps> = ({
                     <td className="p-2 border-r border-slate-200 text-left font-medium">
                       {isLunch ? "Lunch (12:20)" : p === 3 ? "Break 1" : "Break 2"}
                     </td>
-                    <td colSpan={timings.active_days.length} className="p-2 text-[10px] uppercase tracking-wider">
+                    <td colSpan={activeDays.length} className="p-2 text-[10px] uppercase tracking-wider">
                       {isLunch ? "Lunch Interval" : "Short Break"}
                     </td>
                   </tr>
@@ -177,7 +182,7 @@ export const AvailabilityView: React.FC<AvailabilityViewProps> = ({
                   <td className="p-3 font-semibold text-slate-800 border-r border-slate-200 bg-slate-50/40">
                     Period {p}
                   </td>
-                  {timings.active_days.map((day) => {
+                  {activeDays.map((day) => {
                     const blocked = isBlocked(day, p);
                     return (
                       <td

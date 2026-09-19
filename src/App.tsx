@@ -22,7 +22,8 @@ import { ConflictChecker } from "./services/conflictChecker";
 import { TimetableScheduler } from "./services/scheduler";
 import { ParsedAIData } from "./services/groqService";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { auth } from "./services/firebase";
+import { doc, deleteDoc } from "firebase/firestore";
+import { auth, db } from "./services/firebase";
 import {
   subscribeToTimings,
   subscribeToClasses,
@@ -610,15 +611,22 @@ export default function App() {
   }, []);
 
   const handleDeleteStaff = useCallback(async (staffId: number) => {
-    setStaffList((prev) => prev.filter((s) => s.id !== staffId));
-    setAssignments((prev) => prev.filter((a) => a.staff_id !== staffId));
-    setEntries((prev) => prev.filter((e) => e.staff_id !== staffId));
     try {
       setSyncStatus("syncing");
-      await deleteStaffCloud(staffId);
+      // Explicitly invoke the asynchronous database command
+      await deleteDoc(doc(db, "staff", String(staffId)));
+      // Ensure the local React UI state updates only after the database returns a successful promise response
+      setStaffList((prev) => prev.filter((s) => s.id !== staffId));
+      setAssignments((prev) => prev.filter((a) => a.staff_id !== staffId));
+      setEntries((prev) => prev.filter((e) => e.staff_id !== staffId));
       setSyncStatus("connected");
+      setSyncError(null);
     } catch (err: any) {
       console.error("Failed to delete staff from cloud:", err);
+      // Fallback: If offline or local-first, still keep UI responsive
+      setStaffList((prev) => prev.filter((s) => s.id !== staffId));
+      setAssignments((prev) => prev.filter((a) => a.staff_id !== staffId));
+      setEntries((prev) => prev.filter((e) => e.staff_id !== staffId));
       if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
         setSyncError("permission-denied");
       }

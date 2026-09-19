@@ -8,19 +8,23 @@ interface TimingsViewProps {
 }
 
 export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings }) => {
-  const [schoolName, setSchoolName] = useState<string>(timings.school_name);
-  const [academicYear, setAcademicYear] = useState<string>(timings.academic_year);
-  const [startTime, setStartTime] = useState<string>(timings.start_time);
-  const [endTime, setEndTime] = useState<string>(timings.end_time);
-  const [periodDuration, setPeriodDuration] = useState<number>(timings.period_duration_minutes);
-  const [totalPeriods, setTotalPeriods] = useState<number>(timings.total_periods);
-  const [lunchStart, setLunchStart] = useState<string>(timings.lunch_start);
-  const [lunchEnd, setLunchEnd] = useState<string>(timings.lunch_end);
-  const [break1Start, setBreak1Start] = useState<string>(timings.break1_start);
-  const [break1End, setBreak1End] = useState<string>(timings.break1_end);
-  const [break2Start, setBreak2Start] = useState<string>(timings.break2_start);
-  const [break2End, setBreak2End] = useState<string>(timings.break2_end);
-  const [activeDays, setActiveDays] = useState<string[]>([...timings.active_days]);
+  const [schoolName, setSchoolName] = useState<string>(timings?.school_name || "Sri Mahalakshmi Higher Secondary School");
+  const [academicYear, setAcademicYear] = useState<string>(timings?.academic_year || "2025-2026");
+  const [startTime, setStartTime] = useState<string>(timings?.start_time || "09:10");
+  const [endTime, setEndTime] = useState<string>(timings?.end_time || "16:00");
+  const [periodDuration, setPeriodDuration] = useState<number>(timings?.period_duration_minutes ?? 40);
+  const [totalPeriods, setTotalPeriods] = useState<number>(timings?.total_periods ?? 8);
+  const [lunchStart, setLunchStart] = useState<string>(timings?.lunch_start || "12:20");
+  const [lunchEnd, setLunchEnd] = useState<string>(timings?.lunch_end || "13:00");
+  const [break1Start, setBreak1Start] = useState<string>(timings?.break1_start || "10:50");
+  const [break1End, setBreak1End] = useState<string>(timings?.break1_end || "11:00");
+  const [break2Start, setBreak2Start] = useState<string>(timings?.break2_start || "14:50");
+  const [break2End, setBreak2End] = useState<string>(timings?.break2_end || "15:00");
+  const [activeDays, setActiveDays] = useState<string[]>(
+    Array.isArray(timings?.active_days)
+      ? [...timings.active_days]
+      : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+  );
 
   const [savedNotice, setSavedNotice] = useState<boolean>(false);
 
@@ -32,10 +36,11 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
     );
   };
 
-  // Time calculations
-  const toMinutes = (timeStr: string): number => {
-    const [h, m] = timeStr.split(":").map(Number);
-    return h * 60 + m;
+  // Safe time calculations with fallback check before .split()
+  const toMinutes = (timeStr?: string | null, fallback = "00:00"): number => {
+    const safeStr = (timeStr || fallback).trim();
+    const [h, m] = (safeStr || "00:00").split(":").map(Number);
+    return (isNaN(h) ? 0 : h) * 60 + (isNaN(m) ? 0 : m);
   };
 
   const toTimeStr = (minutes: number): string => {
@@ -44,8 +49,8 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
     return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}`;
   };
 
-  const startMin = toMinutes(startTime);
-  const endMin = toMinutes(endTime);
+  const startMin = toMinutes(startTime, "09:10");
+  const endMin = toMinutes(endTime, "16:00");
 
   // Compute live breakdown
   const timeline: { label: string; start: string; end: string; duration: number; type: string }[] = [];
@@ -54,12 +59,12 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
 
   for (let p = 1; p <= totalPeriods; p++) {
     if (p === 3) {
-      const b1S = toMinutes(break1Start);
-      const b1E = toMinutes(break1End);
+      const b1S = toMinutes(break1Start, "10:50");
+      const b1E = toMinutes(break1End, "11:00");
       timeline.push({
         label: "Morning Break",
-        start: break1Start,
-        end: break1End,
+        start: break1Start || "10:50",
+        end: break1End || "11:00",
         duration: b1E - b1S,
         type: "break",
       });
@@ -67,12 +72,12 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
     }
 
     if (p === 5) {
-      const lS = toMinutes(lunchStart);
-      const lE = toMinutes(lunchEnd);
+      const lS = toMinutes(lunchStart, "12:20");
+      const lE = toMinutes(lunchEnd, "13:00");
       timeline.push({
         label: "Lunch Break",
-        start: lunchStart,
-        end: lunchEnd,
+        start: lunchStart || "12:20",
+        end: lunchEnd || "13:00",
         duration: lE - lS,
         type: "lunch",
       });
@@ -80,12 +85,12 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
     }
 
     if (p === 7) {
-      const b2S = toMinutes(break2Start);
-      const b2E = toMinutes(break2End);
+      const b2S = toMinutes(break2Start, "14:50");
+      const b2E = toMinutes(break2End, "15:00");
       timeline.push({
         label: "Afternoon Break",
-        start: break2Start,
-        end: break2End,
+        start: break2Start || "14:50",
+        end: break2End || "15:00",
         duration: b2E - b2S,
         type: "break",
       });
@@ -369,7 +374,7 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
               <span>Calculated Daily Schedule Timeline</span>
             </h3>
             <span className="text-[11px] font-mono text-slate-500">
-              {toMinutes(endTime) - toMinutes(startTime)} mins total span
+              {toMinutes(endTime, "16:00") - toMinutes(startTime, "09:10")} mins total span
             </span>
           </div>
 

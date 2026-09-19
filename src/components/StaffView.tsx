@@ -21,6 +21,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
 }) => {
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const [name, setName] = useState<string>("");
   const [employeeId, setEmployeeId] = useState<string>("");
@@ -353,8 +354,20 @@ export const StaffView: React.FC<StaffViewProps> = ({
                   <Edit2 className="h-3.5 w-3.5" />
                 </button>
                 <button
-                  onClick={() => onDeleteStaff(st.id)}
-                  className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                  onClick={async () => {
+                    if (window.confirm(`Are you sure you want to delete staff member "${st.name}"? This will remove all their timetable assignments.`)) {
+                      try {
+                        setDeletingId(st.id);
+                        await onDeleteStaff(st.id);
+                      } catch (err) {
+                        console.error("Failed to delete staff:", err);
+                      } finally {
+                        setDeletingId(null);
+                      }
+                    }
+                  }}
+                  disabled={deletingId === st.id}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
                   title="Delete Staff"
                 >
                   <Trash2 className="h-3.5 w-3.5" />

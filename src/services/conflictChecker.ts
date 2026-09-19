@@ -196,7 +196,7 @@ export class ConflictChecker {
     }
 
     requiredMap.forEach((reqCount, key) => {
-      const [cIdStr, sIdStr] = key.split("_");
+      const [cIdStr, sIdStr] = (key || "").split("_");
       const cId = parseInt(cIdStr, 10);
       const sId = parseInt(sIdStr, 10);
       const scheduled = scheduledMap.get(key) || 0;
