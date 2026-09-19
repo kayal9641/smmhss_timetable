@@ -75,7 +75,7 @@ export const ClassesView: React.FC<ClassesViewProps> = ({
       name: finalName,
       grade: formGrade.trim() || "8",
       section: formSection.trim() || "A",
-      room_number: formRoom.trim() || undefined,
+      room_number: formRoom.trim() || "",
       subjects: formSubjects.filter((s) => s.periods_per_week > 0),
     };
     onSaveClass(newClass);

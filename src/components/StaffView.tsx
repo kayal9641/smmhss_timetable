@@ -77,14 +77,20 @@ export const StaffView: React.FC<StaffViewProps> = ({
     const newStaff: Staff = {
       id: editingStaff ? editingStaff.id : Date.now(),
       name: name.trim(),
-      employee_id: employeeId.trim() || undefined,
-      email: email.trim() || undefined,
-      phone: phone.trim() || undefined,
+      employee_id: employeeId.trim() || "",
+      email: email.trim() || "",
+      phone: phone.trim() || "",
       max_periods_per_day: maxDay,
       max_periods_per_week: maxWeek,
       qualified_subject_ids: qualifiedSubjectIds,
       assigned_class_ids: assignedClassIds,
-      unavailabilities: editingStaff ? editingStaff.unavailabilities : [],
+      unavailabilities: editingStaff?.unavailabilities
+        ? editingStaff.unavailabilities.map((u) => ({
+            day: u.day,
+            period: u.period,
+            reason: u.reason || "",
+          }))
+        : [],
     };
     onSaveStaff(newStaff);
     setEditingStaff(null);

@@ -48,6 +48,7 @@ import { UserProfile, SyncStatus } from "./types";
 // Layout components
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
+import { FirestoreRulesModal } from "./components/FirestoreRulesModal";
 
 // View components
 import { DashboardView } from "./components/DashboardView";
@@ -164,9 +165,11 @@ export default function App() {
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState<boolean>(false);
   const [isAIModalOpen, setIsAIModalOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [showRulesModal, setShowRulesModal] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connected");
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   // Auth state listener
   useEffect(() => {
@@ -198,56 +201,161 @@ export default function App() {
     };
   }, []);
 
-  // Real-time Cloud Listeners: Firestore as the Central Single Source of Truth
+  // Real-time Cloud Listeners with Safe Persistence (Guards against data wipe-out on reload)
   useEffect(() => {
     setSyncStatus("syncing");
 
     const unsubTimings = subscribeToTimings(
       (t) => {
-        if (t) setTimings(t);
+        if (t) {
+          setTimings(t);
+        } else {
+          // If Firestore document doesn't exist yet, preserve local timings and initialize Firestore
+          setTimings((prev) => {
+            saveSchoolTimingsCloud(prev).catch(() => {});
+            return prev;
+          });
+        }
         setSyncStatus(navigator.onLine ? "connected" : "offline");
+        setSyncError(null);
       },
-      () => setSyncStatus("offline")
+      (err: any) => {
+        console.error("Timings sync notice:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus("offline");
+      }
     );
 
     const unsubClasses = subscribeToClasses(
       (clsList) => {
-        setClasses(clsList);
+        if (clsList.length > 0) {
+          setClasses(clsList);
+        } else {
+          // If cloud has no documents, check if local state has classes and upload them so they are not lost on reload
+          setClasses((prev) => {
+            if (prev && prev.length > 0) {
+              prev.forEach((c) => saveClassCloud(c).catch(() => {}));
+              return prev;
+            }
+            return [];
+          });
+        }
         setSyncStatus(navigator.onLine ? "connected" : "offline");
+        setSyncError(null);
       },
-      () => setSyncStatus("offline")
+      (err: any) => {
+        console.error("Classes sync notice:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus("offline");
+      }
     );
 
     const unsubSubjects = subscribeToSubjects(
       (subjList) => {
-        setSubjects(subjList);
+        if (subjList.length > 0) {
+          setSubjects(subjList);
+        } else {
+          // If cloud has no documents, check if local state has subjects and upload them so they are not lost on reload
+          setSubjects((prev) => {
+            if (prev && prev.length > 0) {
+              prev.forEach((s) => saveSubjectCloud(s).catch(() => {}));
+              return prev;
+            }
+            return [];
+          });
+        }
         setSyncStatus(navigator.onLine ? "connected" : "offline");
+        setSyncError(null);
       },
-      () => setSyncStatus("offline")
+      (err: any) => {
+        console.error("Subjects sync notice:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus("offline");
+      }
     );
 
     const unsubStaff = subscribeToStaff(
       (stList) => {
-        setStaffList(stList);
+        if (stList.length > 0) {
+          setStaffList(stList);
+        } else {
+          // If cloud has no documents, check if local state has staff and upload them so they are not lost on reload
+          setStaffList((prev) => {
+            if (prev && prev.length > 0) {
+              prev.forEach((s) => saveStaffCloud(s).catch(() => {}));
+              return prev;
+            }
+            return [];
+          });
+        }
         setSyncStatus(navigator.onLine ? "connected" : "offline");
+        setSyncError(null);
       },
-      () => setSyncStatus("offline")
+      (err: any) => {
+        console.error("Staff sync notice:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus("offline");
+      }
     );
 
     const unsubAssignments = subscribeToAssignments(
       (asgnList) => {
-        setAssignments(asgnList);
+        if (asgnList.length > 0) {
+          setAssignments(asgnList);
+        } else {
+          // If cloud has no documents, check if local state has assignments and upload them so they are not lost on reload
+          setAssignments((prev) => {
+            if (prev && prev.length > 0) {
+              prev.forEach((a) => saveAssignmentCloud(a).catch(() => {}));
+              return prev;
+            }
+            return [];
+          });
+        }
         setSyncStatus(navigator.onLine ? "connected" : "offline");
+        setSyncError(null);
       },
-      () => setSyncStatus("offline")
+      (err: any) => {
+        console.error("Assignments sync notice:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus("offline");
+      }
     );
 
     const unsubEntries = subscribeToTimetableEntries(
       (entryList) => {
-        setEntries(entryList);
+        if (entryList.length > 0) {
+          setEntries(entryList);
+        } else {
+          // If cloud has no documents, check if local state has entries and upload them so they are not lost on reload
+          setEntries((prev) => {
+            if (prev && prev.length > 0) {
+              saveTimetableEntriesCloud(prev).catch(() => {});
+              return prev;
+            }
+            return [];
+          });
+        }
         setSyncStatus(navigator.onLine ? "connected" : "offline");
+        setSyncError(null);
       },
-      () => setSyncStatus("offline")
+      (err: any) => {
+        console.error("Entries sync notice:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus("offline");
+      }
     );
 
     return () => {
@@ -417,8 +525,12 @@ export default function App() {
       setSyncStatus("syncing");
       await saveClassCloud(cls);
       setSyncStatus("connected");
-    } catch (err) {
+      setSyncError(null);
+    } catch (err: any) {
       console.error("Failed to save class to cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -431,8 +543,11 @@ export default function App() {
       setSyncStatus("syncing");
       await deleteClassCloud(classId);
       setSyncStatus("connected");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to delete class from cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -447,8 +562,12 @@ export default function App() {
       setSyncStatus("syncing");
       await saveSubjectCloud(sub);
       setSyncStatus("connected");
-    } catch (err) {
+      setSyncError(null);
+    } catch (err: any) {
       console.error("Failed to save subject to cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -461,8 +580,11 @@ export default function App() {
       setSyncStatus("syncing");
       await deleteSubjectCloud(subId);
       setSyncStatus("connected");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to delete subject from cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -477,8 +599,12 @@ export default function App() {
       setSyncStatus("syncing");
       await saveStaffCloud(staff);
       setSyncStatus("connected");
-    } catch (err) {
+      setSyncError(null);
+    } catch (err: any) {
       console.error("Failed to save staff to cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -491,8 +617,11 @@ export default function App() {
       setSyncStatus("syncing");
       await deleteStaffCloud(staffId);
       setSyncStatus("connected");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to delete staff from cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -504,8 +633,12 @@ export default function App() {
       setSyncStatus("syncing");
       await saveAssignmentCloud(asgn);
       setSyncStatus("connected");
-    } catch (err) {
+      setSyncError(null);
+    } catch (err: any) {
       console.error("Failed to save assignment to cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -516,8 +649,11 @@ export default function App() {
       setSyncStatus("syncing");
       await deleteAssignmentCloud(asgnId);
       setSyncStatus("connected");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to delete assignment from cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -529,8 +665,12 @@ export default function App() {
       setSyncStatus("syncing");
       await saveSchoolTimingsCloud(newTimings);
       setSyncStatus("connected");
-    } catch (err) {
+      setSyncError(null);
+    } catch (err: any) {
       console.error("Failed to save timings to cloud:", err);
+      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+        setSyncError("permission-denied");
+      }
       setSyncStatus(navigator.onLine ? "connected" : "offline");
     }
   }, []);
@@ -642,7 +782,7 @@ export default function App() {
             );
             if (!existing) {
               const newAsgn: StaffAssignment = {
-                id: Date.now() + Math.random(),
+                id: Math.floor(Date.now() + Math.random() * 1000),
                 class_id: matchedClass.id,
                 subject_id: targetSubject!.id,
                 staff_id: targetStaff!.id,
@@ -687,7 +827,43 @@ export default function App() {
           currentUser={currentUser}
           userProfile={userProfile}
           onOpenAuth={() => setIsAuthModalOpen(true)}
+          onOpenRulesModal={() => setShowRulesModal(true)}
         />
+
+        {/* Firestore Security Rules / Cloud Sync Notice Banner */}
+        {syncError === "permission-denied" && (
+          <div
+            id="firestore-permission-banner"
+            className="flex items-center justify-between border-b border-amber-300 bg-amber-50 px-6 py-2.5 text-xs text-amber-900 shadow-xs"
+          >
+            <div className="flex items-center space-x-2.5">
+              <span className="flex h-2.5 w-2.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+              </span>
+              <span>
+                <strong>Cloud Sync Notice:</strong> To ensure data is permanently saved across browser reloads, publish the Firestore security rules in your Firebase Console. Local data is safely retained on this device.
+              </span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <button
+                id="btn-open-rules-guide"
+                onClick={() => setShowRulesModal(true)}
+                className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 transition-colors cursor-pointer"
+              >
+                View Rules Guide (1 Click)
+              </button>
+              <button
+                id="btn-dismiss-rules-banner"
+                onClick={() => setSyncError(null)}
+                className="text-amber-700 hover:text-amber-950 px-1 py-0.5 text-sm font-bold cursor-pointer"
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Scrollable Workspace View Container */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
@@ -825,6 +1001,13 @@ export default function App() {
         currentUser={currentUser}
         userProfile={userProfile}
         onProfileUpdated={(p) => setUserProfile(p)}
+      />
+
+      {/* Firestore Rules & Persistence Diagnostic Modal */}
+      <FirestoreRulesModal
+        isOpen={showRulesModal}
+        onClose={() => setShowRulesModal(false)}
+        syncErrorType={syncError}
       />
     </div>
   );

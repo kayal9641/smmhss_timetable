@@ -71,7 +71,12 @@ export const AvailabilityView: React.FC<AvailabilityViewProps> = ({
   };
 
   const handleSave = () => {
-    onUpdateStaffAvailability(selectedStaffId, unavailList);
+    const sanitizedList = unavailList.map((u) => ({
+      day: u.day,
+      period: u.period,
+      reason: u.reason?.trim() || "Meeting / Leave",
+    }));
+    onUpdateStaffAvailability(selectedStaffId, sanitizedList);
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 2500);
   };

@@ -113,19 +113,19 @@ export const TimingsView: React.FC<TimingsViewProps> = ({ timings, onSaveTimings
 
   const handleSave = () => {
     const updated: SchoolTimings = {
-      school_name: schoolName,
-      academic_year: academicYear,
-      start_time: startTime,
-      end_time: endTime,
-      period_duration_minutes: periodDuration,
-      total_periods: totalPeriods,
-      lunch_start: lunchStart,
-      lunch_end: lunchEnd,
-      break1_start: break1Start,
-      break1_end: break1End,
-      break2_start: break2Start,
-      break2_end: break2End,
-      active_days: activeDays,
+      school_name: schoolName.trim() || "Sri Mahalakshmi Higher Secondary School",
+      academic_year: academicYear.trim() || "2025-2026",
+      start_time: startTime || "09:10",
+      end_time: endTime || "16:00",
+      period_duration_minutes: periodDuration || 40,
+      total_periods: totalPeriods || 8,
+      lunch_start: lunchStart || "12:20",
+      lunch_end: lunchEnd || "13:00",
+      break1_start: break1Start || "10:50",
+      break1_end: break1End || "11:00",
+      break2_start: break2Start || "14:50",
+      break2_end: break2End || "15:00",
+      active_days: activeDays.length > 0 ? activeDays : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
     };
     onSaveTimings(updated);
     setSavedNotice(true);

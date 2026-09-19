@@ -24,6 +24,7 @@ interface HeaderProps {
   currentUser: User | null;
   userProfile: UserProfile | null;
   onOpenAuth: () => void;
+  onOpenRulesModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   userProfile,
   onOpenAuth,
+  onOpenRulesModal,
 }) => {
   const highConflicts = conflicts.filter((c) => c.severity === "high").length;
 
@@ -66,23 +68,18 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Action Controls & Sync/Auth Status */}
       <div className="flex items-center space-x-2.5">
-        {/* Real-time Connection Status Indicator */}
-        <div
+        {/* Real-time Connection Status Indicator (Clickable to view rules/status) */}
+        <button
           id="cloud-sync-status-indicator"
-          className={`flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-colors ${
+          onClick={onOpenRulesModal}
+          className={`flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-colors cursor-pointer hover:opacity-90 ${
             syncStatus === "connected"
-              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+              ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100/70"
               : syncStatus === "syncing"
-              ? "bg-amber-50 text-amber-800 border-amber-200"
-              : "bg-rose-50 text-rose-800 border-rose-200"
+              ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100/70"
+              : "bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100/70"
           }`}
-          title={
-            syncStatus === "connected"
-              ? "Firebase Firestore: Real-time Cloud Synchronization Active"
-              : syncStatus === "syncing"
-              ? "Synchronizing changes with Cloud Firestore..."
-              : "Connection lost. Reconnecting to Firestore..."
-          }
+          title="Click to check Firebase Cloud Sync & Persistence settings"
         >
           {syncStatus === "connected" ? (
             <>
@@ -103,7 +100,7 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="font-semibold">Firestore Offline</span>
             </>
           )}
-        </div>
+        </button>
 
         {/* User Auth / Profile Badge */}
         <button

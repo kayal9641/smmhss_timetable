@@ -280,7 +280,7 @@ export class TimetableScheduler {
           class_id: item.class_id,
           subject_id: item.subject_id,
           staff_id: item.staff_id,
-          room_number: classMap.get(item.class_id)?.room_number,
+          room_number: classMap.get(item.class_id)?.room_number || "",
         };
 
         classOccupancy.set(`${item.class_id}_${day}_${period}`, entry);
