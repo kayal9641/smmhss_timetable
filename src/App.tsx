@@ -21,6 +21,29 @@ import {
 import { ConflictChecker } from "./services/conflictChecker";
 import { TimetableScheduler } from "./services/scheduler";
 import { ParsedAIData } from "./services/groqService";
+import { onAuthStateChanged, User } from "firebase/auth";
+import { auth } from "./services/firebase";
+import {
+  subscribeToTimings,
+  subscribeToClasses,
+  subscribeToSubjects,
+  subscribeToStaff,
+  subscribeToAssignments,
+  subscribeToTimetableEntries,
+  saveSchoolTimingsCloud,
+  saveClassCloud,
+  deleteClassCloud,
+  saveSubjectCloud,
+  deleteSubjectCloud,
+  saveStaffCloud,
+  deleteStaffCloud,
+  saveAssignmentCloud,
+  deleteAssignmentCloud,
+  saveTimetableEntriesCloud,
+  moveTimetableSlotTransactionCloud,
+  getUserProfile,
+} from "./services/firebaseService";
+import { UserProfile, SyncStatus } from "./types";
 
 // Layout components
 import { Header } from "./components/Header";
@@ -42,6 +65,7 @@ import { CodeViewerView } from "./components/CodeViewerView";
 // Modals
 import { GenerateModal } from "./components/GenerateModal";
 import { AIAssistantModal } from "./components/AIAssistantModal";
+import { AuthModal } from "./components/AuthModal";
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<NavigationTab>("dashboard");
@@ -136,9 +160,105 @@ export default function App() {
   // Availability sub-navigation target
   const [selectedStaffAvailabilityId, setSelectedStaffAvailabilityId] = useState<number | undefined>(undefined);
 
-  // Modals
+  // Modals & Firebase Auth
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState<boolean>(false);
   const [isAIModalOpen, setIsAIModalOpen] = useState<boolean>(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>("connected");
+
+  // Auth state listener
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (user) => {
+      setCurrentUser(user);
+      if (user) {
+        try {
+          const prof = await getUserProfile(user.uid);
+          setUserProfile(prof);
+        } catch (e) {
+          console.error("Error fetching user profile:", e);
+        }
+      } else {
+        setUserProfile(null);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  // Online / Offline network status listener
+  useEffect(() => {
+    const handleOnline = () => setSyncStatus("connected");
+    const handleOffline = () => setSyncStatus("offline");
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // Real-time Cloud Listeners: Firestore as the Central Single Source of Truth
+  useEffect(() => {
+    setSyncStatus("syncing");
+
+    const unsubTimings = subscribeToTimings(
+      (t) => {
+        if (t) setTimings(t);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      },
+      () => setSyncStatus("offline")
+    );
+
+    const unsubClasses = subscribeToClasses(
+      (clsList) => {
+        setClasses(clsList);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      },
+      () => setSyncStatus("offline")
+    );
+
+    const unsubSubjects = subscribeToSubjects(
+      (subjList) => {
+        setSubjects(subjList);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      },
+      () => setSyncStatus("offline")
+    );
+
+    const unsubStaff = subscribeToStaff(
+      (stList) => {
+        setStaffList(stList);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      },
+      () => setSyncStatus("offline")
+    );
+
+    const unsubAssignments = subscribeToAssignments(
+      (asgnList) => {
+        setAssignments(asgnList);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      },
+      () => setSyncStatus("offline")
+    );
+
+    const unsubEntries = subscribeToTimetableEntries(
+      (entryList) => {
+        setEntries(entryList);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      },
+      () => setSyncStatus("offline")
+    );
+
+    return () => {
+      unsubTimings();
+      unsubClasses();
+      unsubSubjects();
+      unsubStaff();
+      unsubAssignments();
+      unsubEntries();
+    };
+  }, []);
 
   // Automatic Conflict Audit Calculation
   const conflicts = useMemo<ConflictItem[]>(() => {
@@ -207,6 +327,14 @@ export default function App() {
 
       if (result.success && result.entries) {
         setEntries(result.entries);
+        try {
+          setSyncStatus("syncing");
+          await saveTimetableEntriesCloud(result.entries);
+          setSyncStatus("connected");
+        } catch (err) {
+          console.error("Error saving generated timetable to Firebase:", err);
+          setSyncStatus(navigator.onLine ? "connected" : "offline");
+        }
       }
 
       return result;
@@ -214,13 +342,17 @@ export default function App() {
     [classes, staffList, subjects, assignments, timings, entries]
   );
 
-  // Manual move entry handler with validation
+  // Manual move entry handler with validation & cloud atomic transaction
   const handleMoveEntry = useCallback(
-    (entryId: number, newDay: string, newPeriod: number): { success: boolean; error?: string } => {
+    async (
+      entryId: number,
+      newDay: string,
+      newPeriod: number
+    ): Promise<{ success: boolean; error?: string }> => {
       const entry = entries.find((e) => e.id === entryId);
       if (!entry) return { success: false, error: "Entry not found" };
 
-      // Validate slot availability
+      // Validate slot availability client-side first
       const validation = ConflictChecker.canAssignSlot(
         entries,
         entry.class_id,
@@ -236,7 +368,26 @@ export default function App() {
         return { success: false, error: validation.reason };
       }
 
-      // Apply move
+      // Execute atomic Firestore cloud transaction to prevent multi-user race conditions
+      setSyncStatus("syncing");
+      const classMap = new Map(classes.map((c) => [c.id, c]));
+      const staffMap = new Map(staffList.map((s) => [s.id, s]));
+
+      const cloudResult = await moveTimetableSlotTransactionCloud(
+        entryId,
+        newDay,
+        newPeriod,
+        classMap,
+        staffMap
+      );
+
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+
+      if (!cloudResult.success) {
+        return { success: false, error: cloudResult.error };
+      }
+
+      // Optimistic update (Firestore real-time listener will also emit update)
       setEntries((prev) =>
         prev.map((e) =>
           e.id === entryId ? { ...e, day: newDay, period: newPeriod } : e
@@ -245,7 +396,7 @@ export default function App() {
 
       return { success: true };
     },
-    [entries, timings, staffList]
+    [entries, timings, staffList, classes]
   );
 
   // Regenerate single class
@@ -256,70 +407,154 @@ export default function App() {
     [handleRunGenerate]
   );
 
-  // Class CRUD
-  const handleSaveClass = useCallback((cls: SchoolClass) => {
+  // Class CRUD with Cloud persistence
+  const handleSaveClass = useCallback(async (cls: SchoolClass) => {
     setClasses((prev) => {
       const exists = prev.some((c) => c.id === cls.id);
       return exists ? prev.map((c) => (c.id === cls.id ? cls : c)) : [...prev, cls];
     });
+    try {
+      setSyncStatus("syncing");
+      await saveClassCloud(cls);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to save class to cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  const handleDeleteClass = useCallback((classId: number) => {
+  const handleDeleteClass = useCallback(async (classId: number) => {
     setClasses((prev) => prev.filter((c) => c.id !== classId));
     setAssignments((prev) => prev.filter((a) => a.class_id !== classId));
     setEntries((prev) => prev.filter((e) => e.class_id !== classId));
+    try {
+      setSyncStatus("syncing");
+      await deleteClassCloud(classId);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to delete class from cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  // Subject CRUD
-  const handleSaveSubject = useCallback((sub: Subject) => {
+  // Subject CRUD with Cloud persistence
+  const handleSaveSubject = useCallback(async (sub: Subject) => {
     setSubjects((prev) => {
       const exists = prev.some((s) => s.id === sub.id);
       return exists ? prev.map((s) => (s.id === sub.id ? sub : s)) : [...prev, sub];
     });
+    try {
+      setSyncStatus("syncing");
+      await saveSubjectCloud(sub);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to save subject to cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  const handleDeleteSubject = useCallback((subId: number) => {
+  const handleDeleteSubject = useCallback(async (subId: number) => {
     setSubjects((prev) => prev.filter((s) => s.id !== subId));
     setAssignments((prev) => prev.filter((a) => a.subject_id !== subId));
     setEntries((prev) => prev.filter((e) => e.subject_id !== subId));
+    try {
+      setSyncStatus("syncing");
+      await deleteSubjectCloud(subId);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to delete subject from cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  // Staff CRUD
-  const handleSaveStaff = useCallback((staff: Staff) => {
+  // Staff CRUD with Cloud persistence
+  const handleSaveStaff = useCallback(async (staff: Staff) => {
     setStaffList((prev) => {
       const exists = prev.some((s) => s.id === staff.id);
       return exists ? prev.map((s) => (s.id === staff.id ? staff : s)) : [...prev, staff];
     });
+    try {
+      setSyncStatus("syncing");
+      await saveStaffCloud(staff);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to save staff to cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  const handleDeleteStaff = useCallback((staffId: number) => {
+  const handleDeleteStaff = useCallback(async (staffId: number) => {
     setStaffList((prev) => prev.filter((s) => s.id !== staffId));
     setAssignments((prev) => prev.filter((a) => a.staff_id !== staffId));
     setEntries((prev) => prev.filter((e) => e.staff_id !== staffId));
+    try {
+      setSyncStatus("syncing");
+      await deleteStaffCloud(staffId);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to delete staff from cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  // Assignment CRUD
-  const handleSaveAssignment = useCallback((asgn: StaffAssignment) => {
+  // Assignment CRUD with Cloud persistence
+  const handleSaveAssignment = useCallback(async (asgn: StaffAssignment) => {
     setAssignments((prev) => [...prev, asgn]);
+    try {
+      setSyncStatus("syncing");
+      await saveAssignmentCloud(asgn);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to save assignment to cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  const handleDeleteAssignment = useCallback((asgnId: number) => {
+  const handleDeleteAssignment = useCallback(async (asgnId: number) => {
     setAssignments((prev) => prev.filter((a) => a.id !== asgnId));
+    try {
+      setSyncStatus("syncing");
+      await deleteAssignmentCloud(asgnId);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to delete assignment from cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  // Timings Update
-  const handleSaveTimings = useCallback((newTimings: SchoolTimings) => {
+  // Timings Update with Cloud persistence
+  const handleSaveTimings = useCallback(async (newTimings: SchoolTimings) => {
     setTimings(newTimings);
+    try {
+      setSyncStatus("syncing");
+      await saveSchoolTimingsCloud(newTimings);
+      setSyncStatus("connected");
+    } catch (err) {
+      console.error("Failed to save timings to cloud:", err);
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
+    }
   }, []);
 
-  // Availability Update
+  // Availability Update with Cloud persistence
   const handleUpdateStaffAvailability = useCallback(
-    (staffId: number, unavailabilities: { day: string; period: number; reason?: string }[]) => {
+    async (staffId: number, unavailabilities: { day: string; period: number; reason?: string }[]) => {
+      const targetStaff = staffList.find((s) => s.id === staffId);
+      if (!targetStaff) return;
+      const updatedStaff = { ...targetStaff, unavailabilities };
+
       setStaffList((prev) =>
-        prev.map((s) => (s.id === staffId ? { ...s, unavailabilities } : s))
+        prev.map((s) => (s.id === staffId ? updatedStaff : s))
       );
+      try {
+        setSyncStatus("syncing");
+        await saveStaffCloud(updatedStaff);
+        setSyncStatus("connected");
+      } catch (err) {
+        console.error("Failed to update staff availability in cloud:", err);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      }
     },
-    []
+    [staffList]
   );
 
   // Natural Language AI Application
@@ -344,6 +579,7 @@ export default function App() {
           default_periods_per_week: 5,
         };
         setSubjects((prev) => [...prev, targetSubject!]);
+        saveSubjectCloud(targetSubject).catch(console.error);
         logs.push(`Created subject: ${targetSubject.name}`);
       }
 
@@ -366,6 +602,7 @@ export default function App() {
           unavailabilities: data.unavailable || [],
         };
         setStaffList((prev) => [...prev, targetStaff!]);
+        saveStaffCloud(targetStaff).catch(console.error);
         logs.push(`Added new teacher: ${targetStaff.name}`);
       } else if (targetStaff) {
         // Update qualification & unavailabilities
@@ -385,6 +622,7 @@ export default function App() {
         setStaffList((prev) =>
           prev.map((s) => (s.id === targetStaff!.id ? targetStaff! : s))
         );
+        saveStaffCloud(targetStaff).catch(console.error);
         logs.push(`Updated ${targetStaff.name} qualifications & availability`);
       }
 
@@ -403,15 +641,14 @@ export default function App() {
                 a.staff_id === targetStaff!.id
             );
             if (!existing) {
-              setAssignments((prev) => [
-                ...prev,
-                {
-                  id: Date.now() + Math.random(),
-                  class_id: matchedClass.id,
-                  subject_id: targetSubject!.id,
-                  staff_id: targetStaff!.id,
-                },
-              ]);
+              const newAsgn: StaffAssignment = {
+                id: Date.now() + Math.random(),
+                class_id: matchedClass.id,
+                subject_id: targetSubject!.id,
+                staff_id: targetStaff!.id,
+              };
+              setAssignments((prev) => [...prev, newAsgn]);
+              saveAssignmentCloud(newAsgn).catch(console.error);
               logs.push(`Assigned ${targetStaff!.name} to ${targetSubject!.name} for Class ${matchedClass.name}`);
             }
           }
@@ -446,6 +683,10 @@ export default function App() {
           onOpenGenerate={() => setIsGenerateModalOpen(true)}
           onOpenAI={() => setIsAIModalOpen(true)}
           onOpenCodeViewer={() => setCurrentTab("code_viewer")}
+          syncStatus={syncStatus}
+          currentUser={currentUser}
+          userProfile={userProfile}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
         />
 
         {/* Scrollable Workspace View Container */}
@@ -575,6 +816,15 @@ export default function App() {
         isOpen={isAIModalOpen}
         onClose={() => setIsAIModalOpen(false)}
         onApplyParsedData={handleApplyParsedAIData}
+      />
+
+      {/* Firebase Cloud Authentication Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        currentUser={currentUser}
+        userProfile={userProfile}
+        onProfileUpdated={(p) => setUserProfile(p)}
       />
     </div>
   );

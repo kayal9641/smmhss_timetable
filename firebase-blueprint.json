@@ -1,0 +1,139 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with access role",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "staff"] },
+        "createdAt": { "type": "string" },
+        "lastLogin": { "type": "string" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "SchoolTimings": {
+      "title": "SchoolTimings",
+      "description": "School bell schedule, periods and timings configuration",
+      "type": "object",
+      "properties": {
+        "school_name": { "type": "string" },
+        "academic_year": { "type": "string" },
+        "start_time": { "type": "string" },
+        "end_time": { "type": "string" },
+        "period_duration_minutes": { "type": "number" },
+        "total_periods": { "type": "number" },
+        "lunch_start": { "type": "string" },
+        "lunch_end": { "type": "string" },
+        "break1_start": { "type": "string" },
+        "break1_end": { "type": "string" },
+        "break2_start": { "type": "string" },
+        "break2_end": { "type": "string" },
+        "active_days": { "type": "array" }
+      },
+      "required": ["school_name", "total_periods"]
+    },
+    "SchoolClass": {
+      "title": "SchoolClass",
+      "description": "School grade or class section",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string" },
+        "grade_level": { "type": "string" },
+        "section": { "type": "string" },
+        "room_number": { "type": "string" },
+        "student_count": { "type": "number" },
+        "class_teacher_id": { "type": "number" }
+      },
+      "required": ["id", "name"]
+    },
+    "Subject": {
+      "title": "Subject",
+      "description": "Academic subject curriculum specification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "category": { "type": "string" },
+        "default_periods_per_week": { "type": "number" },
+        "color": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "Teacher profile and weekly max workload",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "qualifications": { "type": "array" },
+        "max_periods_per_week": { "type": "number" },
+        "unavailabilities": { "type": "array" }
+      },
+      "required": ["id", "name"]
+    },
+    "StaffAssignment": {
+      "title": "StaffAssignment",
+      "description": "Mapping of class, subject, and assigned teacher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "class_id": { "type": "number" },
+        "subject_id": { "type": "number" },
+        "staff_id": { "type": "number" },
+        "periods_per_week": { "type": "number" }
+      },
+      "required": ["id", "class_id", "subject_id", "staff_id"]
+    },
+    "TimetableEntry": {
+      "title": "TimetableEntry",
+      "description": "Scheduled period slot linking class, subject, and teacher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "class_id": { "type": "number" },
+        "subject_id": { "type": "number" },
+        "staff_id": { "type": "number" },
+        "day": { "type": "string" },
+        "period": { "type": "number" }
+      },
+      "required": ["id", "class_id", "subject_id", "staff_id", "day", "period"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile with role permission"
+    },
+    "/school_timings/{docId}": {
+      "schema": "SchoolTimings",
+      "description": "School bell schedule and timings"
+    },
+    "/classes/{classId}": {
+      "schema": "SchoolClass",
+      "description": "Classes and grades collection"
+    },
+    "/subjects/{subjectId}": {
+      "schema": "Subject",
+      "description": "Academic subjects list"
+    },
+    "/staff/{staffId}": {
+      "schema": "Staff",
+      "description": "Faculty and staff members"
+    },
+    "/assignments/{assignmentId}": {
+      "schema": "StaffAssignment",
+      "description": "Subject-teacher allocations for classes"
+    },
+    "/timetable_entries/{entryId}": {
+      "schema": "TimetableEntry",
+      "description": "Scheduled master timetable entries"
+    }
+  }
+}

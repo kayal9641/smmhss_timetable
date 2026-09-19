@@ -122,3 +122,17 @@ export type NavigationTab =
   | "conflicts"
   | "reports"
   | "code_viewer";
+
+export type UserRole = "admin" | "staff";
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  createdAt?: string;
+  lastLogin?: string;
+}
+
+export type SyncStatus = "connected" | "offline" | "syncing";
+

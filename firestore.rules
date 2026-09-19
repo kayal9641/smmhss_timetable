@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper function to get user role
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        getUserData().role == 'admin' ||
+        !exists(/databases/$(database)/documents/users/$(request.auth.uid))
+      );
+    }
+
+    // User documents
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+    }
+
+    // School config & timings
+    match /school_timings/{docId} {
+      allow read, write: if true;
+    }
+
+    // Classes
+    match /classes/{classId} {
+      allow read, write: if true;
+    }
+
+    // Subjects
+    match /subjects/{subjectId} {
+      allow read, write: if true;
+    }
+
+    // Staff
+    match /staff/{staffId} {
+      allow read, write: if true;
+    }
+
+    // Assignments
+    match /assignments/{assignmentId} {
+      allow read, write: if true;
+    }
+
+    // Timetable entries
+    match /timetable_entries/{entryId} {
+      allow read, write: if true;
+    }
+
+    // Audit logs / history
+    match /audit_logs/{logId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+  }
+}

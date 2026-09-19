@@ -30,7 +30,11 @@ interface ClassTimetableViewProps {
   subjects: Subject[];
   entries: TimetableEntry[];
   timings: SchoolTimings;
-  onMoveEntry: (entryId: number, newDay: string, newPeriod: number) => { success: boolean; error?: string };
+  onMoveEntry: (
+    entryId: number,
+    newDay: string,
+    newPeriod: number
+  ) => Promise<{ success: boolean; error?: string }> | { success: boolean; error?: string };
   onRegenerateClass: (classId: number) => void;
 }
 
@@ -180,16 +184,21 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
     setMoveSuccess(null);
   };
 
-  const handleApplyMove = () => {
+  const handleApplyMove = async () => {
     if (!moveModalEntry) return;
-    const result = onMoveEntry(moveModalEntry.id, targetDay, targetPeriod);
-    if (!result.success) {
-      setMoveError(result.error || "Cannot move to this slot due to conflict.");
+    try {
+      const result = await onMoveEntry(moveModalEntry.id, targetDay, targetPeriod);
+      if (!result.success) {
+        setMoveError(result.error || "Cannot move to this slot due to conflict.");
+        setMoveSuccess(null);
+      } else {
+        setMoveSuccess("Successfully moved without conflict!");
+        setMoveError(null);
+        setTimeout(() => setMoveModalEntry(null), 1000);
+      }
+    } catch (err: any) {
+      setMoveError(err.message || "Failed to move slot.");
       setMoveSuccess(null);
-    } else {
-      setMoveSuccess("Successfully moved without conflict!");
-      setMoveError(null);
-      setTimeout(() => setMoveModalEntry(null), 1000);
     }
   };
 
@@ -541,13 +550,11 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                   onChange={(e) => setTargetPeriod(parseInt(e.target.value, 10))}
                   className="w-full rounded-lg border border-slate-300 p-2 text-xs focus:border-blue-500 focus:outline-hidden"
                 >
-                  {Array.from({ length: timings.total_periods }, (_, i) => i + 1)
-                    .filter((p) => p !== 3 && p !== 5 && p !== 7)
-                    .map((p) => (
-                      <option key={p} value={p}>
-                        Period {p} ({getPeriodTime(p)})
-                      </option>
-                    ))}
+                  {Array.from({ length: timings.total_periods }, (_, i) => i + 1).map((p) => (
+                    <option key={p} value={p}>
+                      Period {p} ({getPeriodTime(p)})
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
