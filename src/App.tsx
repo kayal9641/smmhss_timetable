@@ -41,8 +41,6 @@ import {
   saveStaffWithSchedulesAtomicCloud,
   removeStaffClassCloud,
   deleteStaffCloud,
-  saveAssignmentCloud,
-  deleteAssignmentCloud,
   saveTimetableEntriesCloud,
   saveSingleTimetableEntryCloud,
   deleteTimetableEntryCloud,
@@ -64,11 +62,8 @@ import { StaffTimetableView } from "./components/StaffTimetableView";
 import { ClassesView } from "./components/ClassesView";
 import { SubjectsView } from "./components/SubjectsView";
 import { StaffView } from "./components/StaffView";
-import { AssignmentsView } from "./components/AssignmentsView";
 import { TimingsView } from "./components/TimingsView";
-import { AvailabilityView } from "./components/AvailabilityView";
 import { ConflictCheckerView } from "./components/ConflictCheckerView";
-import { CodeViewerView } from "./components/CodeViewerView";
 
 // Modals
 import { GenerateModal } from "./components/GenerateModal";

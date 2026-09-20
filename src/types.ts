@@ -127,12 +127,8 @@ export type NavigationTab =
   | "classes"
   | "subjects"
   | "staff"
-  | "assignments"
   | "timings"
-  | "availability"
-  | "conflicts"
-  | "reports"
-  | "code_viewer";
+  | "conflicts";
 
 export type UserRole = "admin" | "staff";
 

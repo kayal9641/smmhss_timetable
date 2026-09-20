@@ -6,11 +6,8 @@ import {
   GraduationCap,
   BookOpen,
   Users,
-  GitFork,
   Clock,
-  CalendarOff,
   AlertOctagon,
-  FileCode2,
 } from "lucide-react";
 import { NavigationTab, ConflictItem } from "../types";
 
@@ -40,9 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "classes", label: "Classes", icon: GraduationCap },
     { id: "subjects", label: "Subjects", icon: BookOpen },
     { id: "staff", label: "Staff Members", icon: Users },
-    { id: "assignments", label: "Staff Assignments", icon: GitFork },
     { id: "timings", label: "School Timings", icon: Clock },
-    { id: "availability", label: "Availability Matrix", icon: CalendarOff },
     {
       id: "conflicts",
       label: "Conflict Checker",
@@ -50,7 +45,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: conflicts.length,
       badgeColor: highConflicts > 0 ? "bg-rose-500 text-white" : "bg-amber-500 text-white",
     },
-    { id: "code_viewer", label: "Python Code & Docs", icon: FileCode2 },
   ];
 
   return (

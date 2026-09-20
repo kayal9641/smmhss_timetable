@@ -37,7 +37,6 @@ interface StaffViewProps {
   ) => void | Promise<void>;
   onDeleteStaff: (staffId: number) => void;
   onRemoveStaffClass?: (staffId: number, classId: number) => void | Promise<void>;
-  onNavigateToAvailability: (staffId: number) => void;
 }
 
 const formatPeriodTime = (p: number, timings?: SchoolTimings): string => {
@@ -73,7 +72,6 @@ export const StaffView: React.FC<StaffViewProps> = ({
   onSaveStaff,
   onDeleteStaff,
   onRemoveStaffClass,
-  onNavigateToAvailability,
 }) => {
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [isCreating, setIsCreating] = useState<boolean>(false);
@@ -1054,18 +1052,17 @@ export const StaffView: React.FC<StaffViewProps> = ({
                 </div>
               </div>
 
-              {/* Unavailability Count & Action */}
+              {/* Unavailability Count */}
               <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs">
                 <div className="flex items-center space-x-1 text-slate-500">
                   <CalendarOff className="h-3.5 w-3.5 text-slate-400" />
                   <span>{(st.unavailabilities || []).length} blocked periods</span>
                 </div>
-                <button
-                  onClick={() => onNavigateToAvailability(st.id)}
-                  className="font-semibold text-emerald-600 hover:text-emerald-700 text-xs"
-                >
-                  Manage Availability →
-                </button>
+                {(st.unavailabilities || []).length > 0 && (
+                  <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 border border-rose-100">
+                    Restricted
+                  </span>
+                )}
               </div>
             </div>
           );

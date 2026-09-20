@@ -178,7 +178,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Setup Guide for School Admin */}
-      {(classes.length === 0 || staffList.length === 0 || subjects.length === 0 || assignments.length === 0 || entries.length === 0) && (
+      {(classes.length === 0 || staffList.length === 0 || subjects.length === 0 || entries.length === 0) && (
         <div className="rounded-2xl border-2 border-blue-200 bg-gradient-to-br from-blue-50/70 via-indigo-50/40 to-white p-6 shadow-xs">
           <div className="flex items-center justify-between pb-3 border-b border-blue-100">
             <div>
@@ -192,7 +192,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             {/* Step 1: Classes */}
             <div
               onClick={() => onNavigate("classes")}
@@ -239,7 +239,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </div>
             </div>
 
-            {/* Step 3: Staff */}
+            {/* Step 3: Staff & Allocations */}
             <div
               onClick={() => onNavigate("staff")}
               className={`cursor-pointer rounded-xl p-3.5 border transition-all ${
@@ -256,32 +256,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <span className="h-2 w-2 rounded-full bg-slate-300" />
                 )}
               </div>
-              <div className="mt-2 text-sm font-bold text-slate-900">Add Teachers</div>
+              <div className="mt-2 text-sm font-bold text-slate-900">Staff & Allocations</div>
               <div className="text-xs text-slate-500 mt-1">
-                {staffList.length > 0 ? `${staffList.length} faculty registered` : "Faculty names & max load"}
+                {staffList.length > 0 ? `${staffList.length} faculty registered` : "Teachers, classes & periods"}
               </div>
             </div>
 
-            {/* Step 4: Assignments */}
-            <div
-              onClick={() => onNavigate("assignments")}
-              className={`cursor-pointer rounded-xl p-3.5 border transition-all ${
-                classes.length > 0 && staffList.length > 0
-                  ? "bg-white border-blue-200 hover:border-blue-400 shadow-xs"
-                  : "bg-slate-50/70 border-slate-200 opacity-60"
-              }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500 uppercase">Step 4</span>
-                <span className="h-2 w-2 rounded-full bg-slate-300" />
-              </div>
-              <div className="mt-2 text-sm font-bold text-slate-900">Map Assignments</div>
-              <div className="text-xs text-slate-500 mt-1">
-                Link Teacher → Class → Subject
-              </div>
-            </div>
-
-            {/* Step 5: Generate */}
+            {/* Step 4: Generate */}
             <div
               onClick={() => {
                 if (classes.length > 0 && staffList.length > 0) {
@@ -298,7 +279,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <div className="flex items-center justify-between">
                 <span className={`text-xs font-bold uppercase ${classes.length > 0 && staffList.length > 0 ? "text-blue-200" : "text-slate-400"}`}>
-                  Step 5
+                  Step 4
                 </span>
                 <Play className="h-3.5 w-3.5 fill-current" />
               </div>
