@@ -9,6 +9,7 @@ import {
   TimetableEntry,
   ConflictItem,
   GenerationRunResult,
+  StaffScheduleSlot,
 } from "./types";
 import {
   initialClasses,
@@ -37,10 +38,14 @@ import {
   saveSubjectCloud,
   deleteSubjectCloud,
   saveStaffCloud,
+  saveStaffWithSchedulesAtomicCloud,
   deleteStaffCloud,
   saveAssignmentCloud,
   deleteAssignmentCloud,
   saveTimetableEntriesCloud,
+  saveSingleTimetableEntryCloud,
+  deleteTimetableEntryCloud,
+  swapOrMoveTimetableEntriesCloud,
   moveTimetableSlotTransactionCloud,
   getUserProfile,
 } from "./services/firebaseService";
@@ -456,56 +461,95 @@ export default function App() {
     async (
       entryId: number,
       newDay: string,
-      newPeriod: number
+      newPeriod: number,
+      options?: { forceSwap?: boolean; toDock?: boolean }
     ): Promise<{ success: boolean; error?: string }> => {
-      const entry = entries.find((e) => e.id === entryId);
+      const entry = entries.find((e) => Number(e.id) === Number(entryId));
       if (!entry) return { success: false, error: "Entry not found" };
 
-      // Validate slot availability client-side first
-      const validation = ConflictChecker.canAssignSlot(
-        entries,
-        entry.class_id,
-        entry.staff_id,
-        newDay,
-        newPeriod,
-        timings,
-        staffList,
-        entryId
-      );
+      const isDockTarget = newDay === "DOCK" || newPeriod === 0 || options?.toDock;
 
-      if (!validation.allowed) {
-        return { success: false, error: validation.reason };
+      // Find if target slot is occupied by another entry in the same class
+      let targetOccupant: TimetableEntry | undefined;
+      if (!isDockTarget) {
+        targetOccupant = entries.find(
+          (e) =>
+            Number(e.id) !== Number(entryId) &&
+            !e.is_docked &&
+            e.day !== "DOCK" &&
+            Number(e.class_id) === Number(entry.class_id) &&
+            String(e.day).trim().toLowerCase() === String(newDay).trim().toLowerCase() &&
+            Number(e.period) === Number(newPeriod)
+        );
       }
 
-      // Execute atomic Firestore cloud transaction to prevent multi-user race conditions
+      const wasFromDock = Boolean(entry.is_docked || entry.day === "DOCK" || entry.period === 0);
+
+      // Prepare updated entries list
+      const updatedEntriesToSave: TimetableEntry[] = [];
+
+      const updatedDraggedEntry: TimetableEntry = {
+        ...entry,
+        day: isDockTarget ? "DOCK" : newDay,
+        period: isDockTarget ? 0 : newPeriod,
+        is_docked: isDockTarget,
+      };
+      updatedEntriesToSave.push(updatedDraggedEntry);
+
+      let updatedOccupantEntry: TimetableEntry | undefined;
+      if (targetOccupant) {
+        updatedOccupantEntry = {
+          ...targetOccupant,
+          day: wasFromDock ? "DOCK" : entry.day,
+          period: wasFromDock ? 0 : entry.period,
+          is_docked: wasFromDock,
+        };
+        updatedEntriesToSave.push(updatedOccupantEntry);
+      }
+
+      // Optimistic local state update (instant UI reaction)
+      setEntries((prev) => {
+        return prev.map((e) => {
+          if (Number(e.id) === Number(entryId)) {
+            return updatedDraggedEntry;
+          }
+          if (targetOccupant && Number(e.id) === Number(targetOccupant.id)) {
+            return updatedOccupantEntry!;
+          }
+          return e;
+        });
+      });
+
+      // Synchronize with Firestore backend
       setSyncStatus("syncing");
-      const classMap = new Map(classes.map((c) => [c.id, c]));
-      const staffMap = new Map(staffList.map((s) => [s.id, s]));
-
-      const cloudResult = await moveTimetableSlotTransactionCloud(
-        entryId,
-        newDay,
-        newPeriod,
-        classMap,
-        staffMap
-      );
-
-      setSyncStatus(navigator.onLine ? "connected" : "offline");
-
-      if (!cloudResult.success) {
-        return { success: false, error: cloudResult.error };
+      try {
+        await swapOrMoveTimetableEntriesCloud(updatedEntriesToSave);
+        setSyncStatus("connected");
+        setSyncError(null);
+        return { success: true };
+      } catch (err: any) {
+        console.error("Free-form move save error:", err);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+        return { success: true }; // Retain optimistic client update
       }
-
-      // Optimistic update (Firestore real-time listener will also emit update)
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.id === entryId ? { ...e, day: newDay, period: newPeriod } : e
-        )
-      );
-
-      return { success: true };
     },
-    [entries, timings, staffList, classes]
+    [entries]
+  );
+
+  // Direct deletion of an entry (from holding dock or timetable grid)
+  const handleDeleteEntry = useCallback(
+    async (entryId: number) => {
+      setEntries((prev) => prev.filter((e) => Number(e.id) !== Number(entryId)));
+      try {
+        setSyncStatus("syncing");
+        await deleteTimetableEntryCloud(entryId);
+        setSyncStatus("connected");
+      } catch (err) {
+        console.error("Failed to delete entry:", err);
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      }
+    },
+    []
   );
 
   // Regenerate single class
@@ -590,25 +634,175 @@ export default function App() {
     }
   }, []);
 
-  // Staff CRUD with Cloud persistence
-  const handleSaveStaff = useCallback(async (staff: Staff) => {
-    setStaffList((prev) => {
-      const exists = prev.some((s) => s.id === staff.id);
-      return exists ? prev.map((s) => (s.id === staff.id ? staff : s)) : [...prev, staff];
-    });
-    try {
-      setSyncStatus("syncing");
-      await saveStaffCloud(staff);
-      setSyncStatus("connected");
-      setSyncError(null);
-    } catch (err: any) {
-      console.error("Failed to save staff to cloud:", err);
-      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
-        setSyncError("permission-denied");
+  // Staff CRUD with Cloud persistence and simultaneous Timetable slot force-overrides
+  const handleSaveStaff = useCallback(
+    async (staff: Staff, scheduleSlots?: StaffScheduleSlot[]) => {
+      // 1. Optimistically update staffList
+      setStaffList((prev) => {
+        const exists = prev.some((s) => s.id === staff.id);
+        return exists ? prev.map((s) => (s.id === staff.id ? staff : s)) : [...prev, staff];
+      });
+
+      // If no schedule slots provided, just save staff standard
+      if (!scheduleSlots || scheduleSlots.length === 0) {
+        try {
+          setSyncStatus("syncing");
+          await saveStaffCloud(staff);
+          setSyncStatus("connected");
+          setSyncError(null);
+        } catch (err: any) {
+          console.error("Failed to save staff to cloud:", err);
+          if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+            setSyncError("permission-denied");
+          }
+          setSyncStatus(navigator.onLine ? "connected" : "offline");
+        }
+        return;
       }
-      setSyncStatus(navigator.onLine ? "connected" : "offline");
-    }
-  }, []);
+
+      // 2. Prepare Staff Assignments
+      const assignmentsToSave: StaffAssignment[] = [];
+      const currentAssignments = [...assignments];
+      const seenPair = new Set<string>();
+
+      scheduleSlots.forEach((slot) => {
+        const pairKey = `${staff.id}_${slot.classId}_${slot.subjectId}`;
+        if (!seenPair.has(pairKey)) {
+          seenPair.add(pairKey);
+          let existingAsgn = currentAssignments.find(
+            (a) =>
+              Number(a.staff_id) === Number(staff.id) &&
+              Number(a.class_id) === Number(slot.classId) &&
+              Number(a.subject_id) === Number(slot.subjectId)
+          );
+          if (!existingAsgn) {
+            existingAsgn = {
+              id: Date.now() + Math.floor(Math.random() * 10000),
+              staff_id: staff.id,
+              class_id: slot.classId,
+              subject_id: slot.subjectId,
+            };
+          }
+          assignmentsToSave.push(existingAsgn);
+        }
+      });
+
+      // Update assignments state
+      setAssignments((prev) => {
+        let updated = [...prev];
+        assignmentsToSave.forEach((asgn) => {
+          const idx = updated.findIndex((a) => a.id === asgn.id);
+          if (idx >= 0) {
+            updated[idx] = asgn;
+          } else {
+            updated.push(asgn);
+          }
+        });
+        return updated;
+      });
+
+      // 3. Prepare Timetable Entries with Force-Override Support
+      const classMap = new Map(classes.map((c) => [c.id, c]));
+      const newEntriesToSave: TimetableEntry[] = [];
+      const evictedEntryIds: number[] = [];
+
+      scheduleSlots.forEach((slot, index) => {
+        const isDock = slot.day === "DOCK" || slot.period === 0;
+        const targetClass = classMap.get(slot.classId);
+        const entryId =
+          slot.id ||
+          Date.now() + index * 10 + Math.floor(Math.random() * 1000);
+
+        const newEntry: TimetableEntry = {
+          id: entryId,
+          class_id: slot.classId,
+          subject_id: slot.subjectId,
+          staff_id: staff.id,
+          day: isDock ? "DOCK" : slot.day,
+          period: isDock ? 0 : slot.period,
+          room_number: targetClass?.room_number || "",
+          is_docked: isDock,
+          is_manual: true,
+        };
+
+        newEntriesToSave.push(newEntry);
+      });
+
+      // Find any existing entries in the grid that are being overwritten by these new slots
+      entries.forEach((e) => {
+        if (!e) return;
+        // Check if overwritten by a new non-dock entry in same class at same day & period
+        const isOverwritten = newEntriesToSave.some(
+          (ne) =>
+            !ne.is_docked &&
+            Number(ne.class_id) === Number(e.class_id) &&
+            String(ne.day).trim().toLowerCase() === String(e.day).trim().toLowerCase() &&
+            Number(ne.period) === Number(e.period) &&
+            Number(ne.id) !== Number(e.id)
+        );
+        // Check if teacher had an entry at the same day & period elsewhere
+        const isTeacherSlotMoved = newEntriesToSave.some(
+          (ne) =>
+            !ne.is_docked &&
+            Number(ne.staff_id) === Number(e.staff_id) &&
+            String(ne.day).trim().toLowerCase() === String(e.day).trim().toLowerCase() &&
+            Number(ne.period) === Number(e.period) &&
+            Number(ne.id) !== Number(e.id)
+        );
+
+        if (isOverwritten || isTeacherSlotMoved) {
+          evictedEntryIds.push(e.id);
+        }
+      });
+
+      // 4. Optimistically update entries in local UI state simultaneously
+      setEntries((prev) => {
+        // Remove evicted entries
+        let filtered = prev.filter((e) => !evictedEntryIds.includes(e.id));
+
+        // Also if this teacher had previous entries that are now being replaced by the new set:
+        filtered = filtered.filter((e) => {
+          if (Number(e.staff_id) === Number(staff.id)) {
+            const isRetained = newEntriesToSave.some((ne) => Number(ne.id) === Number(e.id));
+            if (!isRetained && !e.is_docked && e.day !== "DOCK") return false;
+          }
+          return true;
+        });
+
+        // Upsert newEntriesToSave
+        newEntriesToSave.forEach((ne) => {
+          const idx = filtered.findIndex((e) => Number(e.id) === Number(ne.id));
+          if (idx >= 0) {
+            filtered[idx] = ne;
+          } else {
+            filtered.push(ne);
+          }
+        });
+
+        return filtered;
+      });
+
+      // 5. Persist atomically to Cloud Firestore
+      try {
+        setSyncStatus("syncing");
+        await saveStaffWithSchedulesAtomicCloud(
+          staff,
+          assignmentsToSave,
+          newEntriesToSave,
+          evictedEntryIds
+        );
+        setSyncStatus("connected");
+        setSyncError(null);
+      } catch (err: any) {
+        console.error("Failed to atomic-save staff and schedules to cloud:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      }
+    },
+    [assignments, classes, entries]
+  );
 
   const handleDeleteStaff = useCallback(async (staffId: number) => {
     try {
@@ -623,33 +817,77 @@ export default function App() {
       setSyncError(null);
     } catch (err: any) {
       console.error("Failed to delete staff from cloud:", err);
-      // Fallback: If offline or local-first, still keep UI responsive
-      setStaffList((prev) => prev.filter((s) => s.id !== staffId));
-      setAssignments((prev) => prev.filter((a) => a.staff_id !== staffId));
-      setEntries((prev) => prev.filter((e) => e.staff_id !== staffId));
+      setSyncStatus(navigator.onLine ? "connected" : "offline");
       if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
         setSyncError("permission-denied");
       }
-      setSyncStatus(navigator.onLine ? "connected" : "offline");
+      throw err;
     }
   }, []);
 
-  // Assignment CRUD with Cloud persistence
-  const handleSaveAssignment = useCallback(async (asgn: StaffAssignment) => {
-    setAssignments((prev) => [...prev, asgn]);
-    try {
-      setSyncStatus("syncing");
-      await saveAssignmentCloud(asgn);
-      setSyncStatus("connected");
-      setSyncError(null);
-    } catch (err: any) {
-      console.error("Failed to save assignment to cloud:", err);
-      if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
-        setSyncError("permission-denied");
+  // Assignment CRUD with Cloud persistence and simultaneous Timetable slot population
+  const handleSaveAssignment = useCallback(
+    async (
+      asgn: StaffAssignment,
+      slot?: { day: string; period: number; toDock?: boolean }
+    ) => {
+      setAssignments((prev) => {
+        const exists = prev.some((a) => a.id === asgn.id);
+        return exists ? prev.map((a) => (a.id === asgn.id ? asgn : a)) : [...prev, asgn];
+      });
+
+      try {
+        setSyncStatus("syncing");
+        await saveAssignmentCloud(asgn);
+
+        // If direct Target Class, Day, and Period are specified, populate TimetableEntry simultaneously
+        if (slot && slot.day && (slot.period > 0 || slot.day === "DOCK" || slot.toDock)) {
+          const isDock = slot.day === "DOCK" || slot.toDock || slot.period === 0;
+          const targetClass = classes.find((c) => Number(c.id) === Number(asgn.class_id));
+
+          const newEntry: TimetableEntry = {
+            id: Date.now() + Math.floor(Math.random() * 1000),
+            class_id: asgn.class_id,
+            staff_id: asgn.staff_id,
+            subject_id: asgn.subject_id,
+            day: isDock ? "DOCK" : slot.day,
+            period: isDock ? 0 : slot.period,
+            room_number: targetClass?.room_number || "",
+            is_docked: isDock,
+          };
+
+          // Optimistically update entries in both Class Timetable and Staff Timetable
+          setEntries((prev) => {
+            if (isDock) {
+              return [...prev, newEntry];
+            }
+            // If the slot in that class was already occupied, replace it or push existing to dock
+            const filtered = prev.filter(
+              (e) =>
+                !(
+                  Number(e.class_id) === Number(asgn.class_id) &&
+                  String(e.day).trim().toLowerCase() === String(slot.day).trim().toLowerCase() &&
+                  Number(e.period) === Number(slot.period)
+                )
+            );
+            return [...filtered, newEntry];
+          });
+
+          await saveSingleTimetableEntryCloud(newEntry);
+        }
+
+        setSyncStatus("connected");
+        setSyncError(null);
+      } catch (err: any) {
+        console.error("Failed to save assignment to cloud:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
       }
-      setSyncStatus(navigator.onLine ? "connected" : "offline");
-    }
-  }, []);
+    },
+    [classes]
+  );
 
   const handleDeleteAssignment = useCallback(async (asgnId: number) => {
     setAssignments((prev) => prev.filter((a) => a.id !== asgnId));
@@ -899,6 +1137,11 @@ export default function App() {
                 entries={entries}
                 timings={timings}
                 onMoveEntry={handleMoveEntry}
+                onDeleteEntry={handleDeleteEntry}
+                onAddEntry={(entry) => {
+                  setEntries((prev) => [...prev, entry]);
+                  saveSingleTimetableEntryCloud(entry);
+                }}
                 onRegenerateClass={handleRegenerateClass}
               />
             )}
@@ -935,6 +1178,9 @@ export default function App() {
                 staffList={staffList}
                 subjects={subjects}
                 classes={classes}
+                entries={entries}
+                timings={timings}
+                assignments={assignments}
                 onSaveStaff={handleSaveStaff}
                 onDeleteStaff={handleDeleteStaff}
                 onNavigateToAvailability={(staffId) => {
@@ -950,6 +1196,7 @@ export default function App() {
                 classes={classes}
                 subjects={subjects}
                 staffList={staffList}
+                timings={timings}
                 onSaveAssignment={handleSaveAssignment}
                 onDeleteAssignment={handleDeleteAssignment}
               />

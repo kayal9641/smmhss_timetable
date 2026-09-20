@@ -7,7 +7,11 @@ interface AssignmentsViewProps {
   classes: SchoolClass[];
   subjects: Subject[];
   staffList: Staff[];
-  onSaveAssignment: (asgn: StaffAssignment) => void;
+  timings?: { active_days?: string[]; total_periods?: number };
+  onSaveAssignment: (
+    asgn: StaffAssignment,
+    slot?: { day: string; period: number; toDock?: boolean }
+  ) => void;
   onDeleteAssignment: (asgnId: number) => void;
 }
 
@@ -16,6 +20,7 @@ export const AssignmentsView: React.FC<AssignmentsViewProps> = ({
   classes,
   subjects,
   staffList,
+  timings,
   onSaveAssignment,
   onDeleteAssignment,
 }) => {
@@ -23,8 +28,18 @@ export const AssignmentsView: React.FC<AssignmentsViewProps> = ({
   const [selectedStaffId, setSelectedStaffId] = useState<number>(staffList[0]?.id || 1);
   const [selectedClassId, setSelectedClassId] = useState<number>(classes[0]?.id || 1);
   const [selectedSubjectId, setSelectedSubjectId] = useState<number>(subjects[0]?.id || 1);
-  const [validationError, setValidationError] = useState<string | null>(null);
+  
+  // Direct Timetable Placement Inputs
+  const [directSchedule, setDirectSchedule] = useState<boolean>(true);
+  const activeDays = timings?.active_days && timings.active_days.length > 0
+    ? timings.active_days
+    : ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const totalPeriods = timings?.total_periods || 8;
+  const [targetDay, setTargetDay] = useState<string>(activeDays[0] || "Monday");
+  const [targetPeriod, setTargetPeriod] = useState<number>(1);
+  const [placeInDock, setPlaceInDock] = useState<boolean>(false);
 
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [filterClassId, setFilterClassId] = useState<string>("all");
 
   const staffMap = new Map(staffList.map((s) => [s.id, s]));
@@ -43,24 +58,21 @@ export const AssignmentsView: React.FC<AssignmentsViewProps> = ({
       return;
     }
 
-    // Check existing assignment for this class & subject
-    const existing = assignments.find(
-      (a) => a.class_id === selectedClassId && a.subject_id === selectedSubjectId
+    onSaveAssignment(
+      {
+        id: Date.now(),
+        staff_id: selectedStaffId,
+        class_id: selectedClassId,
+        subject_id: selectedSubjectId,
+      },
+      directSchedule
+        ? {
+            day: placeInDock ? "DOCK" : targetDay,
+            period: placeInDock ? 0 : targetPeriod,
+            toDock: placeInDock,
+          }
+        : undefined
     );
-    if (existing) {
-      const cName = classMap.get(selectedClassId)?.name;
-      const sName = subjectMap.get(selectedSubjectId)?.name;
-      const currentTeacher = staffMap.get(existing.staff_id)?.name;
-      setValidationError(`${cName} already has ${currentTeacher} assigned for ${sName}. Delete it first to reassign.`);
-      return;
-    }
-
-    onSaveAssignment({
-      id: Date.now(),
-      staff_id: selectedStaffId,
-      class_id: selectedClassId,
-      subject_id: selectedSubjectId,
-    });
     setIsAdding(false);
   };
 
@@ -168,6 +180,88 @@ export const AssignmentsView: React.FC<AssignmentsViewProps> = ({
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Direct Timetable Slot Placement (Simultaneous Class & Staff Update) */}
+          <div className="mt-4 rounded-xl border border-blue-200/80 bg-white p-4 shadow-2xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="chk-direct-schedule"
+                  checked={directSchedule}
+                  onChange={(e) => setDirectSchedule(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="chk-direct-schedule" className="text-xs font-bold text-slate-800 cursor-pointer">
+                  Direct Timetable Placement (Instantly Populates Class & Staff Timetables)
+                </label>
+              </div>
+
+              {directSchedule && (
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="chk-dock"
+                    checked={placeInDock}
+                    onChange={(e) => setPlaceInDock(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
+                  />
+                  <label htmlFor="chk-dock" className="text-[11px] font-medium text-slate-600 cursor-pointer">
+                    Place in Holding Dock instead
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {directSchedule && !placeInDock && (
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-slate-100">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Target Day
+                  </label>
+                  <select
+                    value={targetDay}
+                    onChange={(e) => setTargetDay(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs focus:border-blue-500 focus:outline-hidden"
+                  >
+                    {activeDays.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Target Period
+                  </label>
+                  <select
+                    value={targetPeriod}
+                    onChange={(e) => setTargetPeriod(parseInt(e.target.value, 10))}
+                    className="w-full rounded-lg border border-slate-300 bg-white p-2 text-xs focus:border-blue-500 focus:outline-hidden"
+                  >
+                    {Array.from({ length: totalPeriods }, (_, i) => i + 1).map((p) => (
+                      <option key={p} value={p}>
+                        Period {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {directSchedule && (
+              <div className="mt-2 text-[11px] text-blue-700/90 bg-blue-50/80 rounded-lg p-2 flex items-center space-x-1.5">
+                <Check className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                <span>
+                  {placeInDock
+                    ? "Will be placed in the Extra Classes Holding Dock ready to drag onto the grid at any time."
+                    : `Will immediately assign this teacher and subject to ${classMap.get(selectedClassId)?.name || "Selected Class"} on ${targetDay}, Period ${targetPeriod}.`}
+                </span>
+              </div>
+            )}
           </div>
 
           {validationError && (

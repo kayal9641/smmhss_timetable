@@ -21,6 +21,13 @@ import {
   FileText,
   Layers,
   GraduationCap,
+  Archive,
+  Plus,
+  Trash2,
+  ArrowUpRight,
+  Check,
+  X,
+  Sparkles,
 } from "lucide-react";
 import { TimetableExporter } from "../services/exporter";
 
@@ -33,8 +40,11 @@ interface ClassTimetableViewProps {
   onMoveEntry: (
     entryId: number,
     newDay: string,
-    newPeriod: number
+    newPeriod: number,
+    options?: { forceSwap?: boolean; toDock?: boolean }
   ) => Promise<{ success: boolean; error?: string }> | { success: boolean; error?: string };
+  onDeleteEntry?: (entryId: number) => void;
+  onAddEntry?: (entry: TimetableEntry) => void;
   onRegenerateClass: (classId: number) => void;
 }
 
@@ -45,6 +55,8 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   entries,
   timings,
   onMoveEntry,
+  onDeleteEntry,
+  onAddEntry,
   onRegenerateClass,
 }) => {
   const [selectedClassId, setSelectedClassId] = useState<number>(classes[0]?.id || 1);
@@ -53,6 +65,17 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   const [targetPeriod, setTargetPeriod] = useState<number>(1);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveSuccess, setMoveSuccess] = useState<string | null>(null);
+  const [moveToast, setMoveToast] = useState<string | null>(null);
+
+  // Drag & Drop State
+  const [draggedEntry, setDraggedEntry] = useState<TimetableEntry | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<{ day: string; period: number } | null>(null);
+  const [isOverDock, setIsOverDock] = useState<boolean>(false);
+
+  // Quick Add Extra Class to Dock modal state
+  const [isAddDockOpen, setIsAddDockOpen] = useState<boolean>(false);
+  const [dockSubjectId, setDockSubjectId] = useState<number>(subjects[0]?.id || 1);
+  const [dockStaffId, setDockStaffId] = useState<number>(staffList[0]?.id || 1);
 
   // PDF Export States
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
@@ -60,9 +83,37 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   const [pdfProgressText, setPdfProgressText] = useState<string | null>(null);
   const [pdfToast, setPdfToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const selectedClass = classes.find((c) => c.id === selectedClassId) || classes[0];
-  const staffMap = new Map(staffList.map((s) => [s.id, s]));
-  const subjectMap = new Map(subjects.map((s) => [s.id, s]));
+  const selectedClass = classes.find((c) => Number(c.id) === Number(selectedClassId)) || classes[0];
+
+  const staffMap = React.useMemo(() => {
+    const map = new Map<any, Staff>();
+    staffList.forEach((s) => {
+      map.set(s.id, s);
+      map.set(String(s.id), s);
+      map.set(Number(s.id), s);
+    });
+    return map;
+  }, [staffList]);
+
+  const subjectMap = React.useMemo(() => {
+    const map = new Map<any, Subject>();
+    subjects.forEach((s) => {
+      map.set(s.id, s);
+      map.set(String(s.id), s);
+      map.set(Number(s.id), s);
+    });
+    return map;
+  }, [subjects]);
+
+  // Holding Dock entries for this class (or all classes if needed)
+  const dockedEntries = React.useMemo(() => {
+    return entries.filter((e) => {
+      if (!e) return false;
+      const isDocked = Boolean(e.is_docked || e.day === "DOCK" || Number(e.period) === 0);
+      if (!isDocked) return false;
+      return Number(e.class_id) === Number(selectedClassId);
+    });
+  }, [entries, selectedClassId]);
 
   if (classes.length === 0) {
     return (
@@ -89,7 +140,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
     );
   }
 
-  // Export current class timetable as PDF using jsPDF + html2canvas
+  // Export current class timetable as PDF
   const handleExportClassPdf = async () => {
     if (!selectedClass || isExportingPdf) return;
     setIsExportingPdf(true);
@@ -152,7 +203,6 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
     }
   };
 
-  // Get period times
   const getPeriodTime = (p: number): string => {
     switch (p) {
       case 1:
@@ -176,10 +226,106 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
     }
   };
 
+  // --- Drag and Drop Handlers ---
+  const handleDragStart = (e: React.DragEvent, entry: TimetableEntry) => {
+    setDraggedEntry(entry);
+    e.dataTransfer.setData("application/json", JSON.stringify(entry));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragEnd = () => {
+    setDraggedEntry(null);
+    setDragOverSlot(null);
+    setIsOverDock(false);
+  };
+
+  const handleDropOnSlot = async (e: React.DragEvent, day: string, period: number) => {
+    e.preventDefault();
+    setDragOverSlot(null);
+
+    let entryToMove = draggedEntry;
+    if (!entryToMove) {
+      try {
+        const raw = e.dataTransfer.getData("application/json");
+        if (raw) entryToMove = JSON.parse(raw);
+      } catch {
+        // ignore
+      }
+    }
+    if (!entryToMove) return;
+
+    // If dropped on the same slot, do nothing
+    if (
+      entryToMove.day === day &&
+      Number(entryToMove.period) === Number(period) &&
+      !entryToMove.is_docked
+    ) {
+      return;
+    }
+
+    try {
+      const result = await onMoveEntry(entryToMove.id, day, period, { forceSwap: true });
+      if (result.success) {
+        setMoveToast(`✓ Assigned to ${day} - Period ${period} (swapped if occupied)`);
+        setTimeout(() => setMoveToast(null), 3000);
+      }
+    } catch (err) {
+      console.error("Drop error:", err);
+    } finally {
+      setDraggedEntry(null);
+    }
+  };
+
+  const handleDropOnDock = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsOverDock(false);
+
+    let entryToMove = draggedEntry;
+    if (!entryToMove) {
+      try {
+        const raw = e.dataTransfer.getData("application/json");
+        if (raw) entryToMove = JSON.parse(raw);
+      } catch {
+        // ignore
+      }
+    }
+    if (!entryToMove) return;
+
+    if (entryToMove.is_docked || entryToMove.day === "DOCK" || Number(entryToMove.period) === 0) {
+      return;
+    }
+
+    try {
+      const result = await onMoveEntry(entryToMove.id, "DOCK", 0, { toDock: true });
+      if (result.success) {
+        setMoveToast(`✓ Lesson moved to Holding Dock (slot freed)`);
+        setTimeout(() => setMoveToast(null), 3000);
+      }
+    } catch (err) {
+      console.error("Dock drop error:", err);
+    } finally {
+      setDraggedEntry(null);
+    }
+  };
+
+  const handleSendToDock = async (entry: TimetableEntry) => {
+    try {
+      await onMoveEntry(entry.id, "DOCK", 0, { toDock: true });
+      setMoveToast(`✓ Lesson moved to Holding Dock`);
+      setTimeout(() => setMoveToast(null), 3000);
+      if (moveModalEntry?.id === entry.id) {
+        setMoveModalEntry(null);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // Manual Modal Move
   const handleOpenMove = (entry: TimetableEntry) => {
     setMoveModalEntry(entry);
-    setTargetDay(entry.day);
-    setTargetPeriod(entry.period);
+    setTargetDay(entry.day === "DOCK" ? (timings.active_days[0] || "Monday") : entry.day);
+    setTargetPeriod(entry.period === 0 ? 1 : entry.period);
     setMoveError(null);
     setMoveSuccess(null);
   };
@@ -187,14 +333,14 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   const handleApplyMove = async () => {
     if (!moveModalEntry) return;
     try {
-      const result = await onMoveEntry(moveModalEntry.id, targetDay, targetPeriod);
+      const result = await onMoveEntry(moveModalEntry.id, targetDay, targetPeriod, { forceSwap: true });
       if (!result.success) {
-        setMoveError(result.error || "Cannot move to this slot due to conflict.");
+        setMoveError(result.error || "Cannot move to this slot.");
         setMoveSuccess(null);
       } else {
-        setMoveSuccess("Successfully moved without conflict!");
+        setMoveSuccess("Successfully placed / swapped slot!");
         setMoveError(null);
-        setTimeout(() => setMoveModalEntry(null), 1000);
+        setTimeout(() => setMoveModalEntry(null), 800);
       }
     } catch (err: any) {
       setMoveError(err.message || "Failed to move slot.");
@@ -202,8 +348,27 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
     }
   };
 
+  // Add new extra class directly to the holding dock
+  const handleCreateDockEntry = () => {
+    if (!onAddEntry) return;
+    const newEntry: TimetableEntry = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      class_id: selectedClassId,
+      subject_id: dockSubjectId,
+      staff_id: dockStaffId,
+      day: "DOCK",
+      period: 0,
+      room_number: selectedClass?.room_number || "",
+      is_docked: true,
+    };
+    onAddEntry(newEntry);
+    setIsAddDockOpen(false);
+    setMoveToast(`✓ Added extra class to Holding Dock`);
+    setTimeout(() => setMoveToast(null), 3000);
+  };
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {/* Control Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
         <div className="flex items-center space-x-3">
@@ -216,7 +381,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                 key={cls.id}
                 id={`btn-select-class-${cls.name}`}
                 onClick={() => setSelectedClassId(cls.id)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
                   selectedClassId === cls.id
                     ? "bg-blue-600 text-white shadow-xs"
                     : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -232,7 +397,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
           <button
             id="btn-regen-class"
             onClick={() => onRegenerateClass(selectedClassId)}
-            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-xs"
+            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-xs cursor-pointer"
             title="Regenerate only this class while locking other classes"
           >
             <RefreshCw className="h-3.5 w-3.5 text-slate-500" />
@@ -251,7 +416,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                 timings
               )
             }
-            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-xs"
+            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-xs cursor-pointer"
             title="Export CSV spreadsheet"
           >
             <Download className="h-3.5 w-3.5 text-slate-500" />
@@ -263,7 +428,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
             id="btn-print-class-pdf"
             onClick={handleExportClassPdf}
             disabled={isExportingPdf}
-            className="inline-flex items-center space-x-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="inline-flex items-center space-x-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer"
             title="Export clean, formatted PDF document with school name and academic year header"
           >
             {isExportingPdf ? (
@@ -284,7 +449,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
             id="btn-export-all-classes-pdf"
             onClick={handleExportAllClassesPdf}
             disabled={isExportingAllPdf}
-            className="inline-flex items-center space-x-1.5 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100/70 disabled:opacity-50 shadow-xs transition-colors"
+            className="inline-flex items-center space-x-1.5 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100/70 disabled:opacity-50 shadow-xs transition-colors cursor-pointer"
             title="Export all classes in a single multi-page PDF document"
           >
             {isExportingAllPdf ? (
@@ -308,7 +473,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                 "class-timetable-grid"
               )
             }
-            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-xs"
+            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-xs cursor-pointer"
             title="Quick browser print"
           >
             <Printer className="h-3.5 w-3.5 text-slate-500" />
@@ -317,47 +482,49 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
         </div>
       </div>
 
-      {/* PDF Export Feedback Toast Banner */}
-      {pdfToast && (
+      {/* Floating Action Toast / Feedback */}
+      {(moveToast || pdfToast) && (
         <div
           className={`flex items-center justify-between rounded-xl px-4 py-2.5 text-xs font-medium border shadow-xs transition-all ${
-            pdfToast.type === "success"
-              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
-              : "bg-rose-50 text-rose-800 border-rose-200"
+            pdfToast && pdfToast.type === "error"
+              ? "bg-rose-50 text-rose-800 border-rose-200"
+              : "bg-emerald-50 text-emerald-800 border-emerald-200"
           }`}
         >
           <div className="flex items-center space-x-2">
-            {pdfToast.type === "success" ? (
-              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-            ) : (
-              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
-            )}
-            <span>{pdfToast.message}</span>
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+            <span>{moveToast || pdfToast?.message}</span>
           </div>
           <button
-            onClick={() => setPdfToast(null)}
-            className="text-slate-400 hover:text-slate-600 ml-4"
+            onClick={() => {
+              setMoveToast(null);
+              setPdfToast(null);
+            }}
+            className="text-slate-400 hover:text-slate-600 ml-4 cursor-pointer"
           >
             ✕
           </button>
         </div>
       )}
 
-      {/* Class Details Banner */}
-      <div className="flex items-center justify-between rounded-xl bg-blue-50/60 border border-blue-100 px-4 py-3">
-        <div className="flex items-center space-x-3">
-          <span className="text-sm font-bold text-blue-900">
+      {/* Class Details Banner & Drag-and-Drop Guidance */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl bg-blue-50/70 border border-blue-200/70 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-bold text-blue-950">
             Standard: {selectedClass?.name}
           </span>
-          <span className="text-xs text-blue-700">
-            Room: {selectedClass?.room_number || "Not specified"}
+          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-blue-100 text-blue-800">
+            Room: {selectedClass?.room_number || "Main Building"}
           </span>
           <span className="text-xs text-blue-700">
-            Grade: {selectedClass?.grade} (Section {selectedClass?.section})
+            Grade {selectedClass?.grade} • Sec {selectedClass?.section}
           </span>
         </div>
-        <div className="text-xs text-blue-800 font-medium">
-          Click any lesson card to move or reassign slot
+        <div className="flex items-center space-x-2 text-xs text-blue-900 font-medium">
+          <Sparkles className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+          <span>
+            <strong>Free-Form Drag & Drop:</strong> Drag cards anywhere to reassign or swap slots. Drag to the bottom Dock to temporarily free a slot.
+          </span>
         </div>
       </div>
 
@@ -427,85 +594,395 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                   )}
 
                   <tr key={`period-${p}`} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-3 font-semibold text-slate-800 border-r border-slate-200 bg-slate-50/30">
-                    <div>Period {p}</div>
-                    <div className="text-[10px] font-normal text-slate-400 mt-0.5">
-                      {getPeriodTime(p)}
-                    </div>
-                  </td>
+                    <td className="p-3 font-semibold text-slate-800 border-r border-slate-200 bg-slate-50/30">
+                      <div>Period {p}</div>
+                      <div className="text-[10px] font-normal text-slate-400 mt-0.5">
+                        {getPeriodTime(p)}
+                      </div>
+                    </td>
 
-                  {timings.active_days.map((day) => {
-                    const entry = entries.find(
-                      (e) => e.class_id === selectedClassId && e.day === day && e.period === p
-                    );
-                    const subject = entry ? subjectMap.get(entry.subject_id) : null;
-                    const staff = entry ? staffMap.get(entry.staff_id) : null;
+                    {timings.active_days.map((day) => {
+                      const entry = entries.find((e) => {
+                        if (!e) return false;
+                        if (e.is_docked || e.day === "DOCK" || Number(e.period) === 0) return false;
 
-                    return (
-                      <td
-                        key={`${day}-${p}`}
-                        className="p-2 border-r border-slate-200 last:border-r-0 align-top min-w-[140px]"
-                      >
-                        {entry && subject ? (
-                          <div
-                            onClick={() => handleOpenMove(entry)}
-                            className="group relative cursor-pointer rounded-xl p-2.5 border shadow-2xs transition-all hover:scale-[1.02] hover:shadow-xs"
-                            style={{
-                              backgroundColor: `${subject.color}10`,
-                              borderColor: `${subject.color}40`,
-                            }}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span
-                                className="inline-block rounded-md px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider"
-                                style={{ backgroundColor: subject.color }}
-                              >
-                                {subject.code}
-                              </span>
-                              <Move className="h-3 w-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </div>
+                        const entryClassId = e.class_id !== undefined ? e.class_id : (e as any).classId;
+                        if (entryClassId !== undefined && selectedClassId !== undefined) {
+                          if (Number(entryClassId) !== Number(selectedClassId)) return false;
+                        }
 
-                            <div className="mt-1 font-bold text-slate-900 text-xs truncate">
-                              {subject.name}
-                            </div>
+                        const entryDay = String(e.day || (e as any).day_name || (e as any).dayName || "").trim().toLowerCase();
+                        const targetDayStr = String(day || "").trim().toLowerCase();
+                        if (entryDay !== targetDayStr) return false;
 
-                            <div className="mt-1 flex items-center space-x-1 text-[11px] text-slate-600 truncate">
-                              <User className="h-3 w-3 text-slate-400 shrink-0" />
-                              <span className="truncate">{staff?.name || "Teacher"}</span>
-                            </div>
+                        const entryPeriod = e.period !== undefined ? e.period : ((e as any).period_number ?? (e as any).periodNumber);
+                        if (Number(entryPeriod) !== Number(p)) return false;
 
-                            {entry.room_number && (
-                              <div className="mt-0.5 flex items-center space-x-1 text-[10px] text-slate-400">
-                                <MapPin className="h-2.5 w-2.5 text-slate-400 shrink-0" />
-                                <span>{entry.room_number}</span>
+                        return true;
+                      });
+
+                      const rawSubjectId = entry ? (entry.subject_id !== undefined ? entry.subject_id : (entry as any).subjectId) : null;
+                      const rawStaffId = entry ? (entry.staff_id !== undefined ? entry.staff_id : (entry as any).staffId) : null;
+
+                      const subject = entry ? (
+                        subjectMap.get(rawSubjectId) ||
+                        subjectMap.get(Number(rawSubjectId)) ||
+                        subjectMap.get(String(rawSubjectId)) || {
+                          id: Number(rawSubjectId) || 0,
+                          name: (entry as any).subject_name || (entry as any).subject || `Subject ${rawSubjectId ?? ""}`,
+                          code: (entry as any).subject_code || (entry as any).code || `SUB${rawSubjectId ?? ""}`,
+                          color: "#2563eb",
+                          is_lab: false,
+                          periods_per_week: 1,
+                        }
+                      ) : null;
+
+                      const staff = entry ? (
+                        staffMap.get(rawStaffId) ||
+                        staffMap.get(Number(rawStaffId)) ||
+                        staffMap.get(String(rawStaffId)) ||
+                        (rawStaffId ? {
+                          id: Number(rawStaffId) || 0,
+                          name: (entry as any).staff_name || (entry as any).teacher_name || `Teacher ${rawStaffId}`,
+                          employee_id: "",
+                          max_periods_per_day: 6,
+                          max_periods_per_week: 30,
+                          qualified_subject_ids: [],
+                          assigned_class_ids: [],
+                          unavailabilities: [],
+                        } : null)
+                      ) : null;
+
+                      const isSlotHovered = dragOverSlot?.day === day && dragOverSlot?.period === p;
+
+                      return (
+                        <td
+                          key={`${day}-${p}`}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = "move";
+                            if (dragOverSlot?.day !== day || dragOverSlot?.period !== p) {
+                              setDragOverSlot({ day, period: p });
+                            }
+                          }}
+                          onDragLeave={() => {
+                            if (dragOverSlot?.day === day && dragOverSlot?.period === p) {
+                              setDragOverSlot(null);
+                            }
+                          }}
+                          onDrop={(e) => handleDropOnSlot(e, day, p)}
+                          className={`p-2 border-r border-slate-200 last:border-r-0 align-top min-w-[140px] transition-colors ${
+                            isSlotHovered
+                              ? entry
+                                ? "bg-amber-100/60 ring-2 ring-inset ring-amber-400"
+                                : "bg-blue-100/60 ring-2 ring-inset ring-blue-400"
+                              : ""
+                          }`}
+                        >
+                          {entry ? (
+                            <div
+                              draggable={true}
+                              onDragStart={(e) => handleDragStart(e, entry)}
+                              onDragEnd={handleDragEnd}
+                              onClick={() => handleOpenMove(entry)}
+                              className={`group relative cursor-grab active:cursor-grabbing rounded-xl p-2.5 border shadow-2xs transition-all hover:scale-[1.02] hover:shadow-xs ${
+                                draggedEntry?.id === entry.id ? "opacity-40 ring-2 ring-blue-500" : ""
+                              }`}
+                              style={{
+                                backgroundColor: `${subject?.color || "#2563eb"}15`,
+                                borderColor: `${subject?.color || "#2563eb"}40`,
+                              }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span
+                                  className="inline-block rounded-md px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider"
+                                  style={{ backgroundColor: subject?.color || "#2563eb" }}
+                                >
+                                  {subject?.code || subject?.name?.slice(0, 4) || "SUB"}
+                                </span>
+                                <div className="flex items-center space-x-1">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSendToDock(entry);
+                                    }}
+                                    title="Send to Extra Classes Holding Dock"
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 text-slate-400 hover:text-amber-600 transition-opacity"
+                                  >
+                                    <Archive className="h-3 w-3" />
+                                  </button>
+                                  <Move className="h-3 w-3 text-slate-400 opacity-60 group-hover:opacity-100" />
+                                </div>
                               </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="h-16 flex items-center justify-center rounded-lg border border-dashed border-slate-200 text-[11px] text-slate-300">
-                            Open
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              </React.Fragment>
-            );
-          })}
+
+                              <div className="mt-1 font-bold text-slate-900 text-xs truncate">
+                                {subject?.name || "Subject"}
+                              </div>
+
+                              <div className="mt-1 flex items-center space-x-1 text-[11px] text-slate-600 truncate">
+                                <User className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="truncate">{staff?.name || "Teacher"}</span>
+                              </div>
+
+                              {entry.room_number && (
+                                <div className="mt-0.5 flex items-center space-x-1 text-[10px] text-slate-400">
+                                  <MapPin className="h-2.5 w-2.5 text-slate-400 shrink-0" />
+                                  <span>{entry.room_number}</span>
+                                </div>
+                              )}
+
+                              {isSlotHovered && (
+                                <div className="absolute inset-0 bg-amber-500/15 backdrop-blur-[0.5px] rounded-xl flex items-center justify-center pointer-events-none">
+                                  <span className="bg-amber-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-xs">
+                                    Swap Slots
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div
+                              className={`h-16 flex items-center justify-center rounded-lg border text-[11px] transition-all ${
+                                isSlotHovered
+                                  ? "border-blue-400 bg-blue-50/70 text-blue-600 font-semibold"
+                                  : "border-dashed border-slate-200 text-slate-300"
+                              }`}
+                            >
+                              {isSlotHovered ? "Drop to Place" : "Open"}
+                            </div>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {/* Manual Move Modal with Instant Real-Time Validation */}
+      {/* Extra Classes "Holding Dock" (Staging Area) */}
+      <div
+        id="holding-dock-container"
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          if (!isOverDock) setIsOverDock(true);
+        }}
+        onDragLeave={() => setIsOverDock(false)}
+        onDrop={handleDropOnDock}
+        className={`rounded-2xl border-2 transition-all p-5 shadow-xs ${
+          isOverDock
+            ? "border-blue-500 bg-blue-50/80 ring-4 ring-blue-100"
+            : "border-slate-200 bg-white"
+        }`}
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+          <div className="flex items-center space-x-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+              <Archive className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-sm font-bold text-slate-900">
+                  Extra Classes Holding Dock (Staging Area)
+                </h3>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800">
+                  {dockedEntries.length} {dockedEntries.length === 1 ? "Class" : "Classes"} Held
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Drag lesson cards from the timetable down here to free up slots. Drag any card from here into any day & period above to assign.
+              </p>
+            </div>
+          </div>
+
+          <button
+            id="btn-add-dock-entry"
+            onClick={() => setIsAddDockOpen(true)}
+            className="inline-flex items-center space-x-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors cursor-pointer"
+          >
+            <Plus className="h-3.5 w-3.5 text-slate-600" />
+            <span>Add Class to Dock</span>
+          </button>
+        </div>
+
+        {/* Docked Cards Grid */}
+        <div className="mt-4">
+          {dockedEntries.length === 0 ? (
+            <div
+              className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 text-center transition-colors ${
+                isOverDock
+                  ? "border-blue-400 bg-blue-100/40 text-blue-800"
+                  : "border-slate-200/80 bg-slate-50/50 text-slate-400"
+              }`}
+            >
+              <Archive className={`h-8 w-8 mb-2 ${isOverDock ? "text-blue-600 animate-bounce" : "text-slate-300"}`} />
+              <p className="text-xs font-semibold text-slate-700">
+                {isOverDock ? "Release to place card in the Holding Dock" : "Holding Dock is currently empty"}
+              </p>
+              <p className="text-[11px] text-slate-400 max-w-md mt-0.5">
+                Drag any lesson from the active grid above and drop it here to temporarily unseat it without losing data.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {dockedEntries.map((entry) => {
+                const subject = subjectMap.get(entry.subject_id);
+                const staff = staffMap.get(entry.staff_id);
+
+                return (
+                  <div
+                    key={entry.id}
+                    draggable={true}
+                    onDragStart={(e) => handleDragStart(e, entry)}
+                    onDragEnd={handleDragEnd}
+                    className={`group relative cursor-grab active:cursor-grabbing rounded-xl p-3 border shadow-2xs transition-all hover:scale-[1.02] hover:shadow-md ${
+                      draggedEntry?.id === entry.id ? "opacity-40 ring-2 ring-blue-500" : "bg-white"
+                    }`}
+                    style={{
+                      borderLeftWidth: "4px",
+                      borderLeftColor: subject?.color || "#2563eb",
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span
+                        className="inline-block rounded-md px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider"
+                        style={{ backgroundColor: subject?.color || "#2563eb" }}
+                      >
+                        {subject?.code || "SUB"}
+                      </span>
+
+                      <div className="flex items-center space-x-1">
+                        <button
+                          onClick={() => handleOpenMove(entry)}
+                          title="Assign to slot in timetable"
+                          className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 cursor-pointer"
+                        >
+                          <ArrowUpRight className="h-3.5 w-3.5" />
+                        </button>
+                        {onDeleteEntry && (
+                          <button
+                            onClick={() => onDeleteEntry(entry.id)}
+                            title="Remove from dock"
+                            className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-1.5 font-bold text-slate-900 text-xs truncate">
+                      {subject?.name || "Subject"}
+                    </div>
+
+                    <div className="mt-1 flex items-center space-x-1 text-[11px] text-slate-600 truncate">
+                      <User className="h-3 w-3 text-slate-400 shrink-0" />
+                      <span className="truncate">{staff?.name || "Teacher"}</span>
+                    </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
+                      <span className="flex items-center space-x-1 font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                        <span>Unassigned / Held</span>
+                      </span>
+                      <span className="text-slate-400 group-hover:text-blue-600 font-semibold flex items-center space-x-0.5">
+                        <Move className="h-2.5 w-2.5" />
+                        <span>Drag to grid</span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Quick Add Extra Class to Dock Modal */}
+      {isAddDockOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
+                <Archive className="h-4 w-4 text-amber-600" />
+                <span>Add Extra Class to Holding Dock</span>
+              </h3>
+              <button
+                onClick={() => setIsAddDockOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="mt-2 text-xs text-slate-500">
+              Create an unassigned lesson card for <strong>{selectedClass?.name}</strong>. It will be staged in the Holding Dock ready to drag into the timetable grid at any time.
+            </p>
+
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Subject
+                </label>
+                <select
+                  value={dockSubjectId}
+                  onChange={(e) => setDockSubjectId(parseInt(e.target.value, 10))}
+                  className="w-full rounded-lg border border-slate-300 p-2 text-xs focus:border-blue-500 focus:outline-hidden"
+                >
+                  {subjects.map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.name} ({sub.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Teacher
+                </label>
+                <select
+                  value={dockStaffId}
+                  onChange={(e) => setDockStaffId(parseInt(e.target.value, 10))}
+                  className="w-full rounded-lg border border-slate-300 p-2 text-xs focus:border-blue-500 focus:outline-hidden"
+                >
+                  {staffList.map((st) => (
+                    <option key={st.id} value={st.id}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end space-x-2">
+              <button
+                onClick={() => setIsAddDockOpen(false)}
+                className="rounded-lg border border-slate-200 px-3.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateDockEntry}
+                className="rounded-lg bg-amber-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 shadow-xs cursor-pointer"
+              >
+                Add to Dock
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Move / Swap Slot Modal */}
       {moveModalEntry && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl border border-slate-200">
             <h3 className="text-base font-bold text-slate-900">
-              Move Lesson Slot
+              Reassign or Swap Timetable Slot
             </h3>
             <p className="mt-1 text-xs text-slate-500">
-              Select target Day and Period. The conflict checker automatically validates teacher and class availability before committing.
+              Select target Day and Period. If the slot is already occupied, the existing lesson will automatically swap positions with this one.
             </p>
 
             <div className="mt-4 rounded-xl bg-slate-50 p-3 border border-slate-100 space-y-1 text-xs">
@@ -518,8 +995,10 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                 {staffMap.get(moveModalEntry.staff_id)?.name}
               </div>
               <div>
-                <span className="font-semibold text-slate-700">Current Slot:</span>{" "}
-                {moveModalEntry.day}, Period {moveModalEntry.period}
+                <span className="font-semibold text-slate-700">Current Location:</span>{" "}
+                {moveModalEntry.is_docked || moveModalEntry.day === "DOCK"
+                  ? "Holding Dock (Unassigned)"
+                  : `${moveModalEntry.day}, Period ${moveModalEntry.period}`}
               </div>
             </div>
 
@@ -573,19 +1052,33 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
               </div>
             )}
 
-            <div className="mt-6 flex justify-end space-x-2">
-              <button
-                onClick={() => setMoveModalEntry(null)}
-                className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleApplyMove}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 shadow-xs"
-              >
-                Validate & Move
-              </button>
+            <div className="mt-6 flex items-center justify-between">
+              {!moveModalEntry.is_docked && moveModalEntry.day !== "DOCK" ? (
+                <button
+                  onClick={() => handleSendToDock(moveModalEntry)}
+                  className="inline-flex items-center space-x-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 cursor-pointer"
+                >
+                  <Archive className="h-3.5 w-3.5 text-amber-700" />
+                  <span>Send to Dock</span>
+                </button>
+              ) : (
+                <div />
+              )}
+
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setMoveModalEntry(null)}
+                  className="rounded-lg border border-slate-200 px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleApplyMove}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 shadow-xs cursor-pointer"
+                >
+                  Reassign / Swap
+                </button>
+              </div>
             </div>
           </div>
         </div>

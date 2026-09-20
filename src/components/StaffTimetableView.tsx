@@ -46,9 +46,27 @@ export const StaffTimetableView: React.FC<StaffTimetableViewProps> = ({
   const [pdfProgressText, setPdfProgressText] = useState<string | null>(null);
   const [pdfToast, setPdfToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
-  const selectedStaff = staffList.find((s) => s.id === selectedStaffId) || staffList[0];
-  const classMap = new Map(classes.map((c) => [c.id, c]));
-  const subjectMap = new Map(subjects.map((s) => [s.id, s]));
+  const selectedStaff = staffList.find((s) => Number(s.id) === Number(selectedStaffId)) || staffList[0];
+
+  const classMap = React.useMemo(() => {
+    const map = new Map<any, SchoolClass>();
+    classes.forEach((c) => {
+      map.set(c.id, c);
+      map.set(String(c.id), c);
+      map.set(Number(c.id), c);
+    });
+    return map;
+  }, [classes]);
+
+  const subjectMap = React.useMemo(() => {
+    const map = new Map<any, Subject>();
+    subjects.forEach((s) => {
+      map.set(s.id, s);
+      map.set(String(s.id), s);
+      map.set(Number(s.id), s);
+    });
+    return map;
+  }, [subjects]);
 
   if (staffList.length === 0) {
     return (
@@ -139,7 +157,18 @@ export const StaffTimetableView: React.FC<StaffTimetableViewProps> = ({
   };
 
   // Teaching entries for this staff member
-  const staffEntries = entries.filter((e) => e.staff_id === selectedStaffId);
+  const staffEntries = entries.filter(
+    (e) =>
+      Number(e.staff_id) === Number(selectedStaffId) &&
+      !e.is_docked &&
+      e.day !== "DOCK" &&
+      Number(e.period) > 0
+  );
+  const dockedStaffEntries = entries.filter(
+    (e) =>
+      Number(e.staff_id) === Number(selectedStaffId) &&
+      (e.is_docked || e.day === "DOCK" || Number(e.period) === 0)
+  );
   const totalAssigned = staffEntries.length;
 
   const usablePeriodsPerDay = timings.total_periods;
@@ -352,6 +381,20 @@ export const StaffTimetableView: React.FC<StaffTimetableViewProps> = ({
         </div>
       </div>
 
+      {dockedStaffEntries.length > 0 && (
+        <div className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900">
+          <div className="flex items-center space-x-2">
+            <span className="flex h-2 w-2 rounded-full bg-amber-500"></span>
+            <span>
+              <strong>Holding Dock:</strong> {selectedStaff?.name} has {dockedStaffEntries.length} unassigned class card(s) staged in the Extra Classes Holding Dock.
+            </span>
+          </div>
+          <span className="text-[11px] text-amber-700 font-medium">
+            Visit "Class Timetable" tab to drag onto the grid
+          </span>
+        </div>
+      )}
+
       {/* Main Staff Grid with Prominent FREE Indicators */}
       <div
         id="staff-timetable-grid"
@@ -426,11 +469,56 @@ export const StaffTimetableView: React.FC<StaffTimetableViewProps> = ({
                   </td>
 
                   {timings.active_days.map((day) => {
-                    const entry = entries.find(
-                      (e) => e.staff_id === selectedStaffId && e.day === day && e.period === p
-                    );
-                    const subject = entry ? subjectMap.get(entry.subject_id) : null;
-                    const cls = entry ? classMap.get(entry.class_id) : null;
+                    const entry = entries.find((e) => {
+                      if (!e) return false;
+                      if (e.is_docked || e.day === "DOCK" || Number(e.period) === 0) return false;
+                      // Safe lookup for staff_id
+                      const entryStaffId = e.staff_id !== undefined ? e.staff_id : (e as any).staffId;
+                      if (entryStaffId !== undefined && selectedStaffId !== undefined) {
+                        if (Number(entryStaffId) !== Number(selectedStaffId)) return false;
+                      }
+
+                      // Safe lookup for day
+                      const entryDay = String(e.day || (e as any).day_name || (e as any).dayName || "").trim().toLowerCase();
+                      const targetDay = String(day || "").trim().toLowerCase();
+                      if (entryDay !== targetDay) return false;
+
+                      // Safe lookup for period
+                      const entryPeriod = e.period !== undefined ? e.period : ((e as any).period_number ?? (e as any).periodNumber);
+                      if (Number(entryPeriod) !== Number(p)) return false;
+
+                      return true;
+                    });
+
+                    const rawSubjectId = entry ? (entry.subject_id !== undefined ? entry.subject_id : (entry as any).subjectId) : null;
+                    const rawClassId = entry ? (entry.class_id !== undefined ? entry.class_id : (entry as any).classId) : null;
+
+                    const subject = entry ? (
+                      subjectMap.get(rawSubjectId) ||
+                      subjectMap.get(Number(rawSubjectId)) ||
+                      subjectMap.get(String(rawSubjectId)) || {
+                        id: Number(rawSubjectId) || 0,
+                        name: (entry as any).subject_name || (entry as any).subject || `Subject ${rawSubjectId ?? ""}`,
+                        code: (entry as any).subject_code || (entry as any).code || `SUB${rawSubjectId ?? ""}`,
+                        color: "#10b981",
+                        is_lab: false,
+                        periods_per_week: 1,
+                      }
+                    ) : null;
+
+                    const cls = entry ? (
+                      classMap.get(rawClassId) ||
+                      classMap.get(Number(rawClassId)) ||
+                      classMap.get(String(rawClassId)) || {
+                        id: Number(rawClassId) || 0,
+                        name: (entry as any).class_name || (entry as any).className || `Class ${rawClassId ?? ""}`,
+                        grade: "",
+                        section: "",
+                        room_number: entry.room_number || "",
+                        subjects: [],
+                      }
+                    ) : null;
+
                     const unavail = isUnavailable(day, p);
 
                     return (
@@ -438,31 +526,31 @@ export const StaffTimetableView: React.FC<StaffTimetableViewProps> = ({
                         key={`${day}-${p}`}
                         className="p-2 border-r border-slate-200 last:border-r-0 align-top min-w-[140px]"
                       >
-                        {entry && subject && cls ? (
+                        {entry ? (
                           <div
                             className="rounded-xl p-2.5 border shadow-2xs"
                             style={{
-                              backgroundColor: `${subject.color}15`,
-                              borderColor: `${subject.color}50`,
+                              backgroundColor: `${subject?.color || "#10b981"}15`,
+                              borderColor: `${subject?.color || "#10b981"}50`,
                             }}
                           >
                             <div className="flex items-center justify-between">
                               <span
                                 className="inline-block rounded-md px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider"
-                                style={{ backgroundColor: subject.color }}
+                                style={{ backgroundColor: subject?.color || "#10b981" }}
                               >
-                                {cls.name}
+                                {cls?.name || "Class"}
                               </span>
                               <span className="text-[10px] text-slate-500 font-mono">
-                                {entry.room_number || cls.room_number || ""}
+                                {entry.room_number || cls?.room_number || ""}
                               </span>
                             </div>
 
                             <div className="mt-1 font-bold text-slate-900 text-xs truncate">
-                              {subject.name}
+                              {subject?.name || "Subject"}
                             </div>
                             <div className="text-[10px] text-slate-500 mt-0.5">
-                              Teaching Standard {cls.grade}
+                              {cls?.grade ? `Teaching Standard ${cls.grade}` : (cls?.name || "Scheduled Class")}
                             </div>
                           </div>
                         ) : unavail ? (

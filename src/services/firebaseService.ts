@@ -358,14 +358,17 @@ export function sanitizeAssignment(assignment: StaffAssignment): Record<string, 
  * Sanitizes a TimetableEntry object.
  */
 export function sanitizeTimetableEntry(entry: TimetableEntry): Record<string, any> {
+  const isDocked = Boolean(entry.is_docked || entry.day === "DOCK" || entry.period === 0);
   const cleaned: Record<string, any> = {
     id: Number(entry.id),
-    day: entry.day || "",
-    period: Number(entry.period),
+    day: entry.day || (isDocked ? "DOCK" : ""),
+    period: Number(entry.period || 0),
     class_id: Number(entry.class_id),
     subject_id: Number(entry.subject_id),
     staff_id: Number(entry.staff_id),
     room_number: entry.room_number?.trim() || "",
+    is_docked: isDocked,
+    is_manual: Boolean(entry.is_manual),
   };
   return sanitizeForFirestore(cleaned);
 }
@@ -615,85 +618,162 @@ export async function clearTimetableEntriesCloud(): Promise<void> {
 }
 
 /**
- * Real-time conflict protection transaction for moving/updating a timetable slot:
- * Atomically checks latest timetable_entries in Firestore to guarantee:
- * 1. Target slot has no class conflict
- * 2. Target slot has no teacher conflict
- * 3. Commits the moved slot safely preventing race conditions
+ * Saves or updates a single timetable entry in Firestore
+ */
+export async function saveSingleTimetableEntryCloud(entry: TimetableEntry): Promise<void> {
+  const docRef = doc(db, ENTRIES_COL, String(entry.id));
+  try {
+    await setDoc(docRef, sanitizeTimetableEntry(entry));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${ENTRIES_COL}/${entry.id}`);
+  }
+}
+
+/**
+ * Deletes a single timetable entry from Firestore
+ */
+export async function deleteTimetableEntryCloud(entryId: number): Promise<void> {
+  const docRef = doc(db, ENTRIES_COL, String(entryId));
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${ENTRIES_COL}/${entryId}`);
+  }
+}
+
+/**
+ * Atomically swaps or updates multiple timetable entries (for free-form drag & drop and holding dock)
+ */
+export async function swapOrMoveTimetableEntriesCloud(entriesToUpdate: TimetableEntry[]): Promise<void> {
+  if (!entriesToUpdate || entriesToUpdate.length === 0) return;
+  try {
+    const batch = writeBatch(db);
+    entriesToUpdate.forEach((entry) => {
+      const docRef = doc(db, ENTRIES_COL, String(entry.id));
+      batch.set(docRef, sanitizeTimetableEntry(entry));
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, ENTRIES_COL);
+  }
+}
+
+/**
+ * Atomically saves staff details, assignments, and mapped timetable entries
+ * with force-override support in a single Firestore batch transaction.
+ */
+export async function saveStaffWithSchedulesAtomicCloud(
+  staff: Staff,
+  assignmentsToSave: StaffAssignment[],
+  entriesToSave: TimetableEntry[],
+  entryIdsToDelete: number[] = []
+): Promise<void> {
+  try {
+    const batch = writeBatch(db);
+
+    // 1. Staff document
+    const staffDocRef = doc(db, STAFF_COL, String(staff.id));
+    batch.set(staffDocRef, sanitizeStaff(staff));
+
+    // 2. Staff assignments
+    assignmentsToSave.forEach((asgn) => {
+      const asgnRef = doc(db, ASSIGNMENTS_COL, String(asgn.id));
+      batch.set(asgnRef, sanitizeAssignment(asgn));
+    });
+
+    // 3. Timetable entries (force-overrides & mapped slots)
+    entriesToSave.forEach((entry) => {
+      const entryRef = doc(db, ENTRIES_COL, String(entry.id));
+      batch.set(entryRef, sanitizeTimetableEntry(entry));
+    });
+
+    // 4. Overridden or removed entries
+    entryIdsToDelete.forEach((id) => {
+      const entryRef = doc(db, ENTRIES_COL, String(id));
+      batch.delete(entryRef);
+    });
+
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, STAFF_COL);
+  }
+}
+
+/**
+ * Free-Form Drag & Drop / Manual Move Slot in Firestore:
+ * Allows lesson cards to be moved or swapped into ANY slot across Days x Periods
+ * without crashing or rigid blocking.
  */
 export async function moveTimetableSlotTransactionCloud(
   entryId: number,
   targetDay: string,
   targetPeriod: number,
-  classMap: Map<number, SchoolClass>,
-  staffMap: Map<number, Staff>
-): Promise<{ success: boolean; error?: string }> {
+  classMap?: Map<number, SchoolClass>,
+  staffMap?: Map<number, Staff>,
+  forceOverride: boolean = true
+): Promise<{ success: boolean; error?: string; swappedEntryId?: number }> {
   try {
-    await runTransaction(db, async (transaction) => {
+    const targetDocRef = doc(db, ENTRIES_COL, String(entryId));
+    const targetDocSnap = await getDoc(targetDocRef);
+
+    if (!targetDocSnap.exists()) {
+      // Entry might only exist in local memory, fallback to saving directly
+      return { success: true };
+    }
+
+    const currentEntry = targetDocSnap.data() as TimetableEntry;
+    const isDockTarget = targetDay === "DOCK" || targetPeriod === 0;
+
+    // Check if target slot is already occupied in Firestore for the same class (or teacher)
+    let collidingEntry: TimetableEntry | null = null;
+    if (!isDockTarget) {
       const entriesSnap = await getDocs(collection(db, ENTRIES_COL));
-      const targetDocRef = doc(db, ENTRIES_COL, String(entryId));
-      const targetDocSnap = await transaction.get(targetDocRef);
-
-      if (!targetDocSnap.exists()) {
-        throw new Error("This timetable entry no longer exists in the cloud database.");
-      }
-
-      const currentEntry = targetDocSnap.data() as TimetableEntry;
-
-      // Check all entries for collision on target Day & Period
-      let classCollision: TimetableEntry | null = null;
-      let teacherCollision: TimetableEntry | null = null;
-
       entriesSnap.forEach((d) => {
         const entry = d.data() as TimetableEntry;
-        if (entry.id === entryId) return; // ignore self
-        if (entry.day === targetDay && entry.period === targetPeriod) {
-          if (entry.class_id === currentEntry.class_id) {
-            classCollision = entry;
-          }
-          if (entry.staff_id === currentEntry.staff_id) {
-            teacherCollision = entry;
-          }
+        if (entry.id === entryId) return;
+        if (entry.day === targetDay && entry.period === targetPeriod && entry.class_id === currentEntry.class_id) {
+          collidingEntry = entry;
         }
       });
+    }
 
-      if (classCollision) {
-        const clsName = classMap.get(currentEntry.class_id)?.name || `Class #${currentEntry.class_id}`;
-        throw new Error(
-          `Conflict: ${clsName} already has a lesson scheduled on ${targetDay} Period ${targetPeriod} by another user.`
-        );
+    const batch = writeBatch(db);
+
+    // If target slot is occupied and we allow swap, swap their positions
+    if (collidingEntry && forceOverride) {
+      const otherRef = doc(db, ENTRIES_COL, String((collidingEntry as TimetableEntry).id));
+      if (currentEntry.day === "DOCK" || currentEntry.period === 0) {
+        // Dragged from dock into occupied slot -> push existing occupant into dock
+        batch.set(otherRef, sanitizeTimetableEntry({
+          ...(collidingEntry as TimetableEntry),
+          day: "DOCK",
+          period: 0,
+          is_docked: true,
+        }));
+      } else {
+        // Swap slots between the two entries
+        batch.set(otherRef, sanitizeTimetableEntry({
+          ...(collidingEntry as TimetableEntry),
+          day: currentEntry.day,
+          period: currentEntry.period,
+          is_docked: false,
+        }));
       }
+    }
 
-      if (teacherCollision) {
-        const staffName = staffMap.get(currentEntry.staff_id)?.name || `Teacher #${currentEntry.staff_id}`;
-        throw new Error(
-          `Conflict: ${staffName} is already assigned to teach another class on ${targetDay} Period ${targetPeriod}.`
-        );
-      }
+    // Update the dragged entry
+    batch.set(targetDocRef, sanitizeTimetableEntry({
+      ...currentEntry,
+      day: targetDay,
+      period: targetPeriod,
+      is_docked: isDockTarget,
+    }));
 
-      // Check teacher unavailability
-      const staff = staffMap.get(currentEntry.staff_id);
-      if (staff?.unavailabilities) {
-        const isUnavail = staff.unavailabilities.some(
-          (u) => u.day === targetDay && u.period === targetPeriod
-        );
-        if (isUnavail) {
-          throw new Error(
-            `Conflict: ${staff.name} is marked as unavailable on ${targetDay} Period ${targetPeriod}.`
-          );
-        }
-      }
-
-      // Safe to commit
-      transaction.update(targetDocRef, {
-        day: targetDay,
-        period: targetPeriod,
-      });
-    });
-
-    return { success: true };
+    await batch.commit();
+    return { success: true, swappedEntryId: collidingEntry ? (collidingEntry as TimetableEntry).id : undefined };
   } catch (err: any) {
-    return { success: false, error: err.message || "Failed to move timetable slot." };
+    console.error("Free-form move error:", err);
+    return { success: false, error: err.message || "Failed to update slot." };
   }
 }
 

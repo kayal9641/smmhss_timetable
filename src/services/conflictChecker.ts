@@ -28,6 +28,7 @@ export class ConflictChecker {
     // 1. HARD CONSTRAINT: Teacher Double Booking
     const teacherSlots = new Map<string, TimetableEntry[]>();
     for (const e of entries) {
+      if (!e || e.is_docked || e.day === "DOCK" || Number(e.period) === 0) continue;
       const key = `${e.staff_id}_${e.day}_${e.period}`;
       if (!teacherSlots.has(key)) teacherSlots.set(key, []);
       teacherSlots.get(key)!.push(e);
@@ -58,6 +59,7 @@ export class ConflictChecker {
     // 2. HARD CONSTRAINT: Class Double Booking
     const classSlots = new Map<string, TimetableEntry[]>();
     for (const e of entries) {
+      if (!e || e.is_docked || e.day === "DOCK" || Number(e.period) === 0) continue;
       const key = `${e.class_id}_${e.day}_${e.period}`;
       if (!classSlots.has(key)) classSlots.set(key, []);
       classSlots.get(key)!.push(e);
@@ -94,6 +96,7 @@ export class ConflictChecker {
     }
 
     for (const e of entries) {
+      if (!e || e.is_docked || e.day === "DOCK" || Number(e.period) === 0) continue;
       if (unavailSet.has(`${e.staff_id}_${e.day}_${e.period}`)) {
         const stName = staffMap.get(e.staff_id)?.name || "Teacher";
         const cName = classMap.get(e.class_id) || "Class";

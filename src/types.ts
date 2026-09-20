@@ -61,6 +61,17 @@ export interface TimetableEntry {
   subject_id: number;
   staff_id: number;
   room_number?: string;
+  is_docked?: boolean;
+  is_manual?: boolean;
+}
+
+export interface StaffScheduleSlot {
+  id?: number;
+  tempId?: string;
+  classId: number;
+  subjectId: number;
+  day: string;
+  period: number;
 }
 
 export interface SchoolTimings {
