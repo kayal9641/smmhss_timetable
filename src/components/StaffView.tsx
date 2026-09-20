@@ -20,6 +20,7 @@ import {
   Zap,
   Clock,
   BookOpen,
+  AlertTriangle,
 } from "lucide-react";
 
 interface StaffViewProps {
@@ -29,8 +30,13 @@ interface StaffViewProps {
   entries?: TimetableEntry[];
   timings?: SchoolTimings;
   assignments?: StaffAssignment[];
-  onSaveStaff: (staff: Staff, scheduleSlots?: StaffScheduleSlot[]) => void | Promise<void>;
+  onSaveStaff: (
+    staff: Staff,
+    scheduleSlots?: StaffScheduleSlot[],
+    deletedEntryIds?: number[]
+  ) => void | Promise<void>;
   onDeleteStaff: (staffId: number) => void;
+  onRemoveStaffClass?: (staffId: number, classId: number) => void | Promise<void>;
   onNavigateToAvailability: (staffId: number) => void;
 }
 
@@ -66,6 +72,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
   assignments = [],
   onSaveStaff,
   onDeleteStaff,
+  onRemoveStaffClass,
   onNavigateToAvailability,
 }) => {
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
@@ -82,6 +89,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
   const [qualifiedSubjectIds, setQualifiedSubjectIds] = useState<number[]>([]);
   const [assignedClassIds, setAssignedClassIds] = useState<number[]>([]);
   const [scheduleSlots, setScheduleSlots] = useState<StaffScheduleSlot[]>([]);
+  const [deletedEntryIds, setDeletedEntryIds] = useState<number[]>([]);
 
   const subjectMap = new Map(subjects.map((s) => [s.id, s]));
   const classMap = new Map(classes.map((c) => [c.id, c]));
@@ -101,6 +109,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
     setPhone("");
     setMaxDay(6);
     setMaxWeek(26);
+    setDeletedEntryIds([]);
     const initialQual = [subjects[0]?.id || 1];
     const initialClass = [classes[0]?.id || 1];
     setQualifiedSubjectIds(initialQual);
@@ -131,10 +140,16 @@ export const StaffView: React.FC<StaffViewProps> = ({
     setMaxDay(st.max_periods_per_day);
     setMaxWeek(st.max_periods_per_week);
     setQualifiedSubjectIds([...st.qualified_subject_ids]);
-    setAssignedClassIds([...st.assigned_class_ids]);
+
+    // Strict validation: Only include assigned classes that currently exist in the school
+    const validAssignedClasses = (st.assigned_class_ids || []).filter((cId) =>
+      classMap.has(cId)
+    );
+    setAssignedClassIds(validAssignedClasses);
 
     // Pre-populate scheduleSlots from existing entries for this staff member
-    const existingForStaff = entries.filter(
+    // ONLY for classes that are currently in validAssignedClasses!
+    const allEntriesForStaff = entries.filter(
       (e) =>
         Number(e.staff_id) === Number(st.id) &&
         !e.is_docked &&
@@ -142,8 +157,20 @@ export const StaffView: React.FC<StaffViewProps> = ({
         Number(e.period) > 0
     );
 
-    if (existingForStaff.length > 0) {
-      const mappedSlots: StaffScheduleSlot[] = existingForStaff.map((e) => ({
+    const validEntriesForStaff = allEntriesForStaff.filter((e) =>
+      validAssignedClasses.includes(Number(e.class_id))
+    );
+
+    // Track any orphaned entry IDs (entries belonging to classes no longer assigned)
+    // so they will be deleted atomically in Firestore and local state
+    const orphanedEntryIds = allEntriesForStaff
+      .filter((e) => !validAssignedClasses.includes(Number(e.class_id)))
+      .map((e) => e.id);
+
+    setDeletedEntryIds(orphanedEntryIds);
+
+    if (validEntriesForStaff.length > 0) {
+      const mappedSlots: StaffScheduleSlot[] = validEntriesForStaff.map((e) => ({
         id: e.id,
         tempId: `slot_${e.id}_${Math.random()}`,
         classId: e.class_id,
@@ -153,8 +180,8 @@ export const StaffView: React.FC<StaffViewProps> = ({
       }));
       setScheduleSlots(mappedSlots);
     } else {
-      // If no entries exist yet, create initial slot rows for assigned classes
-      const initialSlots: StaffScheduleSlot[] = st.assigned_class_ids.map((classId, idx) => {
+      // If no valid entries exist yet, create initial slot rows strictly for the valid assigned classes
+      const initialSlots: StaffScheduleSlot[] = validAssignedClasses.map((classId, idx) => {
         const asgn = assignments.find(
           (a) => Number(a.staff_id) === Number(st.id) && Number(a.class_id) === Number(classId)
         );
@@ -191,8 +218,25 @@ export const StaffView: React.FC<StaffViewProps> = ({
 
   const toggleAssignedClass = (classId: number) => {
     if (assignedClassIds.includes(classId)) {
+      // 1. Unselect the class immediately from local form state
       setAssignedClassIds((prev) => prev.filter((id) => id !== classId));
+
+      // 2. Queue any existing persistent timetable entries for this class to be deleted in Firestore
+      const slotsToRemove = scheduleSlots.filter((s) => s.classId === classId);
+      const idsToRemove = slotsToRemove.filter((s) => s.id).map((s) => s.id!);
+      if (idsToRemove.length > 0) {
+        setDeletedEntryIds((prev) => [...prev, ...idsToRemove]);
+      }
+
+      // 3. Location 1: Erase all inline schedule slot rows for this class immediately from Staff Form UI
       setScheduleSlots((prev) => prev.filter((s) => s.classId !== classId));
+
+      // 4. Locations 2 & 3: Global Timetable Cleansing
+      // If an existing staff member is being edited, immediately wipe all scheduled periods
+      // for this teacher-class pairing from both the Class Timetable grid and the Staff Timetable grid
+      if (editingStaff && onRemoveStaffClass) {
+        onRemoveStaffClass(editingStaff.id, classId);
+      }
     } else {
       setAssignedClassIds((prev) => [...prev, classId]);
       const defaultSub = qualifiedSubjectIds[0] || subjects[0]?.id || 1;
@@ -240,7 +284,76 @@ export const StaffView: React.FC<StaffViewProps> = ({
   };
 
   const handleRemoveSlot = (tempId: string) => {
+    const slotToRemove = scheduleSlots.find((s) => s.tempId === tempId);
+    if (slotToRemove?.id) {
+      setDeletedEntryIds((prev) => [...prev, slotToRemove.id!]);
+    }
     setScheduleSlots((prev) => prev.filter((s) => s.tempId !== tempId));
+  };
+
+  // Real-Time Staff Availability & Conflict Verification
+  const getSlotConflictWarning = (slot: StaffScheduleSlot): string | null => {
+    if (!slot.day || slot.day === "DOCK" || !slot.period || Number(slot.period) <= 0) {
+      return null;
+    }
+
+    const teacherName = name.trim() || editingStaff?.name || "Teacher";
+    const slotDay = String(slot.day).trim().toLowerCase();
+    const slotPeriod = Number(slot.period);
+
+    // 1. Scan this teacher's active schedule array across all other rows in this form
+    const otherFormSlot = scheduleSlots.find(
+      (s) =>
+        s.tempId !== slot.tempId &&
+        assignedClassIds.includes(s.classId) &&
+        String(s.day).trim().toLowerCase() === slotDay &&
+        Number(s.period) === slotPeriod
+    );
+
+    if (otherFormSlot) {
+      const otherClassObj = classMap.get(otherFormSlot.classId);
+      const otherSubObj = subjectMap.get(otherFormSlot.subjectId);
+      const otherClassName = otherClassObj ? `Class ${otherClassObj.name}` : "another class";
+      const otherSubName = otherSubObj ? ` ${otherSubObj.name}` : "";
+      return `⚠️ Warning: ${teacherName} is already taking ${otherClassName}${otherSubName} during ${slot.day} - Period ${slot.period}.`;
+    }
+
+    // 2. Scan teacher's existing schedule array across other classes in the timetable (not being edited in the form)
+    if (editingStaff) {
+      const existingConflict = entries.find((e) => {
+        if (Number(e.staff_id) !== Number(editingStaff.id)) return false;
+        if (e.is_docked || e.day === "DOCK" || Number(e.period) <= 0) return false;
+        if (
+          String(e.day).trim().toLowerCase() !== slotDay ||
+          Number(e.period) !== slotPeriod
+        )
+          return false;
+        // If this entry matches one of the current form slot IDs, it's represented in the form
+        if (scheduleSlots.some((s) => Number(s.id) === Number(e.id))) return false;
+        return true;
+      });
+
+      if (existingConflict) {
+        const otherClassObj = classMap.get(existingConflict.class_id);
+        const otherSubObj = subjectMap.get(existingConflict.subject_id);
+        const otherClassName = otherClassObj ? `Class ${otherClassObj.name}` : "another class";
+        const otherSubName = otherSubObj ? ` ${otherSubObj.name}` : "";
+        return `⚠️ Warning: ${teacherName} is already taking ${otherClassName}${otherSubName} during ${slot.day} - Period ${slot.period}.`;
+      }
+
+      // 3. Scan teacher unavailability / blocked periods
+      const unavail = (editingStaff.unavailabilities || []).find(
+        (u) =>
+          String(u.day).trim().toLowerCase() === slotDay &&
+          Number(u.period) === slotPeriod
+      );
+      if (unavail) {
+        const reasonSuffix = unavail.reason ? ` (${unavail.reason})` : "";
+        return `⚠️ Warning: ${teacherName} is marked unavailable during ${slot.day} - Period ${slot.period}${reasonSuffix}.`;
+      }
+    }
+
+    return null;
   };
 
   const handleSave = async () => {
@@ -248,6 +361,8 @@ export const StaffView: React.FC<StaffViewProps> = ({
     setIsSaving(true);
     try {
       const staffId = editingStaff ? editingStaff.id : Date.now();
+      const activeAssignedClasses = assignedClassIds.filter((cId) => classMap.has(cId));
+
       const newStaff: Staff = {
         id: staffId,
         name: name.trim(),
@@ -257,7 +372,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
         max_periods_per_day: maxDay,
         max_periods_per_week: maxWeek,
         qualified_subject_ids: qualifiedSubjectIds,
-        assigned_class_ids: assignedClassIds,
+        assigned_class_ids: activeAssignedClasses,
         unavailabilities: editingStaff?.unavailabilities
           ? editingStaff.unavailabilities.map((u) => ({
               day: u.day,
@@ -267,7 +382,12 @@ export const StaffView: React.FC<StaffViewProps> = ({
           : [],
       };
 
-      await onSaveStaff(newStaff, scheduleSlots);
+      // Strict sanity filter: ensure scheduleSlots only contains classes that are in activeAssignedClasses
+      const sanitizedSlots = scheduleSlots.filter(
+        (s) => activeAssignedClasses.includes(s.classId) && classMap.has(s.classId)
+      );
+
+      await onSaveStaff(newStaff, sanitizedSlots, deletedEntryIds);
       setEditingStaff(null);
       setIsCreating(false);
     } catch (err) {
@@ -479,6 +599,7 @@ export const StaffView: React.FC<StaffViewProps> = ({
                 return (
                   <button
                     key={c.id}
+                    id={`btn-class-badge-${c.id}`}
                     type="button"
                     onClick={() => toggleAssignedClass(c.id)}
                     className={`inline-flex items-center space-x-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold border transition-all ${
@@ -500,204 +621,246 @@ export const StaffView: React.FC<StaffViewProps> = ({
             </div>
 
             {/* Dynamic Structured Class, Subject, and Period Schedule Rows */}
-            {assignedClassIds.length > 0 ? (
-              <div className="space-y-3 mt-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <Zap className="h-4 w-4 text-amber-500" />
-                    <span className="text-xs font-bold text-slate-800">
-                      Inline Schedule Slots (Force-Override Priority)
+            {(() => {
+              const activeEligibleClassIds = assignedClassIds.filter((cId) => classMap.has(cId));
+              const sanitizedSlots = scheduleSlots.filter((s) =>
+                activeEligibleClassIds.includes(s.classId)
+              );
+
+              if (activeEligibleClassIds.length === 0) {
+                return (
+                  <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center">
+                    <p className="text-xs text-slate-500 font-medium">
+                      No eligible classes selected yet. Choose at least one class above to configure inline subject & period assignments.
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="space-y-3 mt-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Zap className="h-4 w-4 text-amber-500" />
+                      <span className="text-xs font-bold text-slate-800">
+                        Inline Schedule Slots (Force-Override Priority)
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      Auto-populates Class & Staff Timetables
                     </span>
                   </div>
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    Auto-populates Class & Staff Timetables
-                  </span>
-                </div>
 
-                <div className="space-y-3">
-                  {assignedClassIds.map((classId) => {
-                    const cls = classMap.get(classId);
-                    if (!cls) return null;
-                    const classSlots = scheduleSlots.filter((s) => s.classId === classId);
+                  <div className="space-y-3">
+                    {activeEligibleClassIds.map((classId) => {
+                      const cls = classMap.get(classId)!;
+                      const classSlots = sanitizedSlots.filter((s) => s.classId === classId);
 
-                    return (
-                      <div
-                        key={classId}
-                        className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs space-y-3"
-                      >
-                        {/* Class Header */}
-                        <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                          <div className="flex items-center space-x-2">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
-                              Class {cls.name}
-                            </span>
-                            {cls.room_number && (
-                              <span className="text-[11px] text-slate-500 font-medium">
-                                Room {cls.room_number}
+                      return (
+                        <div
+                          key={classId}
+                          className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs space-y-3"
+                        >
+                          {/* Class Header */}
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <div className="flex items-center space-x-2">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                                Class {cls.name}
                               </span>
-                            )}
-                            <span className="text-[11px] text-slate-400">
-                              • {classSlots.length} {classSlots.length === 1 ? "period" : "periods"} mapped
-                            </span>
+                              {cls.room_number && (
+                                <span className="text-[11px] text-slate-500 font-medium">
+                                  Room {cls.room_number}
+                                </span>
+                              )}
+                              <span className="text-[11px] text-slate-400">
+                                • {classSlots.length} {classSlots.length === 1 ? "period" : "periods"} mapped
+                              </span>
+                            </div>
+
+                            <div className="flex items-center space-x-2">
+                              <button
+                                type="button"
+                                onClick={() => handleAddSlotForClass(classId)}
+                                className="inline-flex items-center space-x-1 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                              >
+                                <Plus className="h-3 w-3" />
+                                <span>Add Period</span>
+                              </button>
+                              <button
+                                type="button"
+                                id={`btn-remove-class-${classId}`}
+                                onClick={() => toggleAssignedClass(classId)}
+                                className="inline-flex items-center space-x-1 text-[11px] text-rose-500 hover:text-rose-700 font-medium px-2 py-1 rounded-md hover:bg-rose-50 transition-colors"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                <span>Remove Class</span>
+                              </button>
+                            </div>
                           </div>
 
-                          <div className="flex items-center space-x-2">
-                            <button
-                              type="button"
-                              onClick={() => handleAddSlotForClass(classId)}
-                              className="inline-flex items-center space-x-1 rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
-                            >
-                              <Plus className="h-3 w-3" />
-                              <span>Add Period</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => toggleAssignedClass(classId)}
-                              className="text-[11px] text-slate-400 hover:text-rose-600 font-medium transition-colors"
-                            >
-                              Remove Class
-                            </button>
-                          </div>
-                        </div>
+                          {/* List of Schedule Slot Rows */}
+                          {classSlots.length === 0 ? (
+                            <div className="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-200 text-center">
+                              <p className="text-xs text-slate-500 mb-2">
+                                No teaching slots mapped for Class {cls.name} yet.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => handleAddSlotForClass(classId)}
+                                className="inline-flex items-center space-x-1.5 rounded-lg bg-white px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-300 hover:bg-emerald-50 shadow-2xs"
+                              >
+                                <Plus className="h-3.5 w-3.5" />
+                                <span>Map Schedule Slot</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-2.5">
+                              {classSlots.map((slot, sIdx) => {
+                                // Filter teacher's qualified subjects only!
+                                const teacherQualifiedSubjects = subjects.filter((s) =>
+                                  qualifiedSubjectIds.includes(s.id)
+                                );
+                                const availableSubjects =
+                                  teacherQualifiedSubjects.length > 0 ? teacherQualifiedSubjects : subjects;
 
-                        {/* List of Schedule Slot Rows */}
-                        {classSlots.length === 0 ? (
-                          <div className="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-200 text-center">
-                            <p className="text-xs text-slate-500 mb-2">
-                              No teaching slots mapped for Class {cls.name} yet.
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => handleAddSlotForClass(classId)}
-                              className="inline-flex items-center space-x-1.5 rounded-lg bg-white px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-300 hover:bg-emerald-50 shadow-2xs"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                              <span>Map Schedule Slot</span>
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {classSlots.map((slot, sIdx) => {
-                              // Filter teacher's qualified subjects only!
-                              const teacherQualifiedSubjects = subjects.filter((s) =>
-                                qualifiedSubjectIds.includes(s.id)
-                              );
-                              const availableSubjects =
-                                teacherQualifiedSubjects.length > 0 ? teacherQualifiedSubjects : subjects;
+                                const conflictWarning = getSlotConflictWarning(slot);
+                                const hasConflict = !!conflictWarning;
 
-                              return (
-                                <div
-                                  key={slot.tempId}
-                                  className="flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200/80"
-                                >
-                                  {/* Slot Number */}
-                                  <div className="flex items-center justify-between sm:justify-start space-x-2">
-                                    <span className="h-5 w-5 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold flex items-center justify-center shrink-0">
-                                      {sIdx + 1}
-                                    </span>
-                                  </div>
-
-                                  {/* 3 Inline Selectors Grid */}
-                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 flex-1">
-                                    {/* 1. [Select Subject]: Filters only qualified subjects */}
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
-                                        Subject (Qualified Only)
-                                      </label>
-                                      <select
-                                        value={slot.subjectId}
-                                        onChange={(e) =>
-                                          handleUpdateSlot(slot.tempId!, {
-                                            subjectId: Number(e.target.value),
-                                          })
-                                        }
-                                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
-                                      >
-                                        {availableSubjects.map((sub) => (
-                                          <option key={sub.id} value={sub.id}>
-                                            {sub.name} ({sub.code})
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-
-                                    {/* 2. [Select Day]: Monday to Friday/Saturday */}
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
-                                        Day
-                                      </label>
-                                      <select
-                                        value={slot.day}
-                                        onChange={(e) =>
-                                          handleUpdateSlot(slot.tempId!, {
-                                            day: e.target.value,
-                                          })
-                                        }
-                                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
-                                      >
-                                        {activeDays.map((d) => (
-                                          <option key={d} value={d}>
-                                            {d}
-                                          </option>
-                                        ))}
-                                        <option value="DOCK">Holding Dock (Staged)</option>
-                                      </select>
-                                    </div>
-
-                                    {/* 3. [Select Period]: Period 1 to 8 */}
-                                    <div>
-                                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
-                                        Period
-                                      </label>
-                                      <select
-                                        value={slot.period}
-                                        onChange={(e) =>
-                                          handleUpdateSlot(slot.tempId!, {
-                                            period: Number(e.target.value),
-                                          })
-                                        }
-                                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
-                                      >
-                                        {Array.from(
-                                          { length: totalPeriods },
-                                          (_, i) => i + 1
-                                        ).map((p) => (
-                                          <option key={p} value={p}>
-                                            Period {p} ({formatPeriodTime(p, timings)})
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </div>
-                                  </div>
-
-                                  {/* Delete Slot Action */}
-                                  <div className="flex items-center justify-end sm:justify-center pt-1 sm:pt-4">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveSlot(slot.tempId!)}
-                                      className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
-                                      title="Remove this slot"
+                                return (
+                                  <div key={slot.tempId} className="space-y-1.5">
+                                    <div
+                                      className={`flex flex-col sm:flex-row sm:items-center gap-2 p-2.5 rounded-lg border transition-all ${
+                                        hasConflict
+                                          ? "bg-rose-50/40 border-rose-300 shadow-2xs"
+                                          : "bg-slate-50 border-slate-200/80"
+                                      }`}
                                     >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
+                                      {/* Slot Number */}
+                                      <div className="flex items-center justify-between sm:justify-start space-x-2">
+                                        <span
+                                          className={`h-5 w-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${
+                                            hasConflict
+                                              ? "bg-rose-200 text-rose-800"
+                                              : "bg-slate-200 text-slate-700"
+                                          }`}
+                                        >
+                                          {sIdx + 1}
+                                        </span>
+                                      </div>
+
+                                      {/* 3 Inline Selectors Grid */}
+                                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 flex-1">
+                                        {/* 1. [Select Subject]: Filters only qualified subjects */}
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                                            Subject (Qualified Only)
+                                          </label>
+                                          <select
+                                            value={slot.subjectId}
+                                            onChange={(e) =>
+                                              handleUpdateSlot(slot.tempId!, {
+                                                subjectId: Number(e.target.value),
+                                              })
+                                            }
+                                            className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 focus:border-emerald-500 focus:outline-hidden"
+                                          >
+                                            {availableSubjects.map((sub) => (
+                                              <option key={sub.id} value={sub.id}>
+                                                {sub.name} ({sub.code})
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+
+                                        {/* 2. [Select Day]: Monday to Friday/Saturday */}
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                                            Day
+                                          </label>
+                                          <select
+                                            value={slot.day}
+                                            onChange={(e) =>
+                                              handleUpdateSlot(slot.tempId!, {
+                                                day: e.target.value,
+                                              })
+                                            }
+                                            className={`w-full rounded-md border bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 focus:outline-hidden ${
+                                              hasConflict
+                                                ? "border-rose-400 focus:border-rose-500 text-rose-900"
+                                                : "border-slate-300 focus:border-emerald-500"
+                                            }`}
+                                          >
+                                            {activeDays.map((d) => (
+                                              <option key={d} value={d}>
+                                                {d}
+                                              </option>
+                                            ))}
+                                            <option value="DOCK">Holding Dock (Staged)</option>
+                                          </select>
+                                        </div>
+
+                                        {/* 3. [Select Period]: Period 1 to 8 */}
+                                        <div>
+                                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                                            Period
+                                          </label>
+                                          <select
+                                            value={slot.period}
+                                            onChange={(e) =>
+                                              handleUpdateSlot(slot.tempId!, {
+                                                period: Number(e.target.value),
+                                              })
+                                            }
+                                            className={`w-full rounded-md border bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 focus:outline-hidden ${
+                                              hasConflict
+                                                ? "border-rose-400 focus:border-rose-500 text-rose-900"
+                                                : "border-slate-300 focus:border-emerald-500"
+                                            }`}
+                                          >
+                                            {Array.from(
+                                              { length: totalPeriods },
+                                              (_, i) => i + 1
+                                            ).map((p) => (
+                                              <option key={p} value={p}>
+                                                Period {p} ({formatPeriodTime(p, timings)})
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </div>
+
+                                      {/* Delete Slot Action */}
+                                      <div className="flex items-center justify-end sm:justify-center pt-1 sm:pt-4">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveSlot(slot.tempId!)}
+                                          className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                                          title="Remove this slot"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    {/* Visual Conflict Warning Alert (Soft-Override) */}
+                                    {hasConflict && (
+                                      <div className="flex items-center space-x-2 rounded-lg bg-rose-50 border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 shadow-2xs">
+                                        <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0" />
+                                        <span>{conflictWarning}</span>
+                                      </div>
+                                    )}
                                   </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="p-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center">
-                <p className="text-xs text-slate-500 font-medium">
-                  No eligible classes selected yet. Choose at least one class above to configure inline subject & period assignments.
-                </p>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* Real-Time Auto-Population Notice */}

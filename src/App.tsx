@@ -39,6 +39,7 @@ import {
   deleteSubjectCloud,
   saveStaffCloud,
   saveStaffWithSchedulesAtomicCloud,
+  removeStaffClassCloud,
   deleteStaffCloud,
   saveAssignmentCloud,
   deleteAssignmentCloud,
@@ -634,38 +635,31 @@ export default function App() {
     }
   }, []);
 
-  // Staff CRUD with Cloud persistence and simultaneous Timetable slot force-overrides
+  // Staff CRUD with Cloud persistence, simultaneous Timetable slot force-overrides,
+  // and cascading data cleanup on class/slot deletion
   const handleSaveStaff = useCallback(
-    async (staff: Staff, scheduleSlots?: StaffScheduleSlot[]) => {
+    async (
+      staff: Staff,
+      scheduleSlots?: StaffScheduleSlot[],
+      explicitDeletedEntryIds?: number[]
+    ) => {
       // 1. Optimistically update staffList
       setStaffList((prev) => {
         const exists = prev.some((s) => s.id === staff.id);
         return exists ? prev.map((s) => (s.id === staff.id ? staff : s)) : [...prev, staff];
       });
 
-      // If no schedule slots provided, just save staff standard
-      if (!scheduleSlots || scheduleSlots.length === 0) {
-        try {
-          setSyncStatus("syncing");
-          await saveStaffCloud(staff);
-          setSyncStatus("connected");
-          setSyncError(null);
-        } catch (err: any) {
-          console.error("Failed to save staff to cloud:", err);
-          if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
-            setSyncError("permission-denied");
-          }
-          setSyncStatus(navigator.onLine ? "connected" : "offline");
-        }
-        return;
-      }
+      // 2. Filter schedule slots to only those for active assigned classes
+      const validSlots = (scheduleSlots || []).filter((slot) =>
+        staff.assigned_class_ids.includes(Number(slot.classId))
+      );
 
-      // 2. Prepare Staff Assignments
+      // Prepare Staff Assignments (only for active assigned classes)
       const assignmentsToSave: StaffAssignment[] = [];
       const currentAssignments = [...assignments];
       const seenPair = new Set<string>();
 
-      scheduleSlots.forEach((slot) => {
+      validSlots.forEach((slot) => {
         const pairKey = `${staff.id}_${slot.classId}_${slot.subjectId}`;
         if (!seenPair.has(pairKey)) {
           seenPair.add(pairKey);
@@ -687,9 +681,20 @@ export default function App() {
         }
       });
 
-      // Update assignments state
+      // Find any assignments for this teacher that belong to removed/unselected classes
+      const assignmentsToDelete: number[] = [];
+      currentAssignments.forEach((a) => {
+        if (
+          Number(a.staff_id) === Number(staff.id) &&
+          !staff.assigned_class_ids.includes(Number(a.class_id))
+        ) {
+          assignmentsToDelete.push(a.id);
+        }
+      });
+
+      // Update assignments local state
       setAssignments((prev) => {
-        let updated = [...prev];
+        let updated = prev.filter((a) => !assignmentsToDelete.includes(a.id));
         assignmentsToSave.forEach((asgn) => {
           const idx = updated.findIndex((a) => a.id === asgn.id);
           if (idx >= 0) {
@@ -701,12 +706,21 @@ export default function App() {
         return updated;
       });
 
-      // 3. Prepare Timetable Entries with Force-Override Support
+      // 3. Prepare Timetable Entries with Force-Override Support & Cascading Deletions
       const classMap = new Map(classes.map((c) => [c.id, c]));
       const newEntriesToSave: TimetableEntry[] = [];
       const evictedEntryIds: number[] = [];
 
-      scheduleSlots.forEach((slot, index) => {
+      // Include explicit deleted entry IDs from component
+      if (explicitDeletedEntryIds && explicitDeletedEntryIds.length > 0) {
+        explicitDeletedEntryIds.forEach((id) => {
+          if (!evictedEntryIds.includes(id)) {
+            evictedEntryIds.push(id);
+          }
+        });
+      }
+
+      validSlots.forEach((slot, index) => {
         const isDock = slot.day === "DOCK" || slot.period === 0;
         const targetClass = classMap.get(slot.classId);
         const entryId =
@@ -728,46 +742,45 @@ export default function App() {
         newEntriesToSave.push(newEntry);
       });
 
-      // Find any existing entries in the grid that are being overwritten by these new slots
+      // Scan all existing entries in the grid for cascading cleanup and collision overrides
       entries.forEach((e) => {
         if (!e) return;
-        // Check if overwritten by a new non-dock entry in same class at same day & period
+
+        // A. If this entry belonged to this staff member:
+        if (Number(e.staff_id) === Number(staff.id)) {
+          // If the entry's class was unselected/removed, OR this slot is no longer retained in newEntriesToSave:
+          const isClassStillAssigned = staff.assigned_class_ids.includes(Number(e.class_id));
+          const isSlotRetained = newEntriesToSave.some((ne) => Number(ne.id) === Number(e.id));
+          if (!isClassStillAssigned || (!isSlotRetained && !e.is_docked && e.day !== "DOCK")) {
+            if (!evictedEntryIds.includes(e.id)) {
+              evictedEntryIds.push(e.id);
+            }
+          }
+        }
+
+        // B. Check if another entry in the class/period is overwritten by this teacher's new slots
         const isOverwritten = newEntriesToSave.some(
           (ne) =>
             !ne.is_docked &&
+            ne.day !== "DOCK" &&
+            Number(ne.period) > 0 &&
             Number(ne.class_id) === Number(e.class_id) &&
             String(ne.day).trim().toLowerCase() === String(e.day).trim().toLowerCase() &&
             Number(ne.period) === Number(e.period) &&
             Number(ne.id) !== Number(e.id)
         );
-        // Check if teacher had an entry at the same day & period elsewhere
-        const isTeacherSlotMoved = newEntriesToSave.some(
-          (ne) =>
-            !ne.is_docked &&
-            Number(ne.staff_id) === Number(e.staff_id) &&
-            String(ne.day).trim().toLowerCase() === String(e.day).trim().toLowerCase() &&
-            Number(ne.period) === Number(e.period) &&
-            Number(ne.id) !== Number(e.id)
-        );
 
-        if (isOverwritten || isTeacherSlotMoved) {
-          evictedEntryIds.push(e.id);
+        if (isOverwritten) {
+          if (!evictedEntryIds.includes(e.id)) {
+            evictedEntryIds.push(e.id);
+          }
         }
       });
 
       // 4. Optimistically update entries in local UI state simultaneously
       setEntries((prev) => {
-        // Remove evicted entries
+        // Remove all evicted/unselected entries
         let filtered = prev.filter((e) => !evictedEntryIds.includes(e.id));
-
-        // Also if this teacher had previous entries that are now being replaced by the new set:
-        filtered = filtered.filter((e) => {
-          if (Number(e.staff_id) === Number(staff.id)) {
-            const isRetained = newEntriesToSave.some((ne) => Number(ne.id) === Number(e.id));
-            if (!isRetained && !e.is_docked && e.day !== "DOCK") return false;
-          }
-          return true;
-        });
 
         // Upsert newEntriesToSave
         newEntriesToSave.forEach((ne) => {
@@ -789,7 +802,8 @@ export default function App() {
           staff,
           assignmentsToSave,
           newEntriesToSave,
-          evictedEntryIds
+          evictedEntryIds,
+          assignmentsToDelete
         );
         setSyncStatus("connected");
         setSyncError(null);
@@ -802,6 +816,60 @@ export default function App() {
       }
     },
     [assignments, classes, entries]
+  );
+
+  // Global Cascading Erasure: Immediately purge all scheduled periods and assignments
+  // for a specific teacher-class pairing across all state locations (Staff Form, Class Timetable, Staff Timetable)
+  // and sync to Cloud Firestore atomically
+  const handleRemoveStaffClass = useCallback(
+    async (staffId: number, classId: number) => {
+      // 1. Immediately update global timetable entries state
+      setEntries((prev) =>
+        prev.filter(
+          (e) => !(Number(e.staff_id) === Number(staffId) && Number(e.class_id) === Number(classId))
+        )
+      );
+
+      // 2. Immediately update staff assignments state
+      setAssignments((prev) =>
+        prev.filter(
+          (a) => !(Number(a.staff_id) === Number(staffId) && Number(a.class_id) === Number(classId))
+        )
+      );
+
+      // 3. Update staffList assigned_class_ids for this teacher
+      let updatedAssignedClassIds: number[] = [];
+      setStaffList((prev) =>
+        prev.map((s) => {
+          if (Number(s.id) === Number(staffId)) {
+            const nextClassIds = (s.assigned_class_ids || []).filter(
+              (cId) => Number(cId) !== Number(classId)
+            );
+            updatedAssignedClassIds = nextClassIds;
+            return {
+              ...s,
+              assigned_class_ids: nextClassIds,
+            };
+          }
+          return s;
+        })
+      );
+
+      // 4. Atomically sync the erasure to Cloud Firestore
+      try {
+        setSyncStatus("syncing");
+        await removeStaffClassCloud(staffId, classId, updatedAssignedClassIds);
+        setSyncStatus("connected");
+        setSyncError(null);
+      } catch (err: any) {
+        console.error("Failed to execute global cascading class removal in cloud:", err);
+        if (err?.code === "permission-denied" || err?.message?.includes("permissions")) {
+          setSyncError("permission-denied");
+        }
+        setSyncStatus(navigator.onLine ? "connected" : "offline");
+      }
+    },
+    []
   );
 
   const handleDeleteStaff = useCallback(async (staffId: number) => {
@@ -1183,6 +1251,7 @@ export default function App() {
                 assignments={assignments}
                 onSaveStaff={handleSaveStaff}
                 onDeleteStaff={handleDeleteStaff}
+                onRemoveStaffClass={handleRemoveStaffClass}
                 onNavigateToAvailability={(staffId) => {
                   setSelectedStaffAvailabilityId(staffId);
                   setCurrentTab("availability");

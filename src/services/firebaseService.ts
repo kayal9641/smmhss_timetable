@@ -437,9 +437,30 @@ export async function saveClassCloud(schoolClass: SchoolClass): Promise<void> {
 }
 
 export async function deleteClassCloud(classId: number): Promise<void> {
-  const docRef = doc(db, CLASSES_COL, String(classId));
   try {
-    await deleteDoc(docRef);
+    const batch = writeBatch(db);
+    const docRef = doc(db, CLASSES_COL, String(classId));
+    batch.delete(docRef);
+
+    // Clean up any entries for this class
+    const entriesSnap = await getDocs(collection(db, ENTRIES_COL));
+    entriesSnap.forEach((d) => {
+      const data = d.data();
+      if (Number(data.class_id) === Number(classId)) {
+        batch.delete(d.ref);
+      }
+    });
+
+    // Clean up any assignments for this class
+    const asgnSnap = await getDocs(collection(db, ASSIGNMENTS_COL));
+    asgnSnap.forEach((d) => {
+      const data = d.data();
+      if (Number(data.class_id) === Number(classId)) {
+        batch.delete(d.ref);
+      }
+    });
+
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${CLASSES_COL}/${classId}`);
   }
@@ -666,7 +687,8 @@ export async function saveStaffWithSchedulesAtomicCloud(
   staff: Staff,
   assignmentsToSave: StaffAssignment[],
   entriesToSave: TimetableEntry[],
-  entryIdsToDelete: number[] = []
+  entryIdsToDelete: number[] = [],
+  assignmentIdsToDelete: number[] = []
 ): Promise<void> {
   try {
     const batch = writeBatch(db);
@@ -687,10 +709,16 @@ export async function saveStaffWithSchedulesAtomicCloud(
       batch.set(entryRef, sanitizeTimetableEntry(entry));
     });
 
-    // 4. Overridden or removed entries
+    // 4. Overridden, unselected, or deleted entries
     entryIdsToDelete.forEach((id) => {
       const entryRef = doc(db, ENTRIES_COL, String(id));
       batch.delete(entryRef);
+    });
+
+    // 5. Removed assignments for deleted/unselected classes
+    assignmentIdsToDelete.forEach((id) => {
+      const asgnRef = doc(db, ASSIGNMENTS_COL, String(id));
+      batch.delete(asgnRef);
     });
 
     await batch.commit();
@@ -803,4 +831,61 @@ export async function saveUserProfile(profile: UserProfile): Promise<void> {
 export async function checkIfFirstUser(): Promise<boolean> {
   const snap = await getDocs(collection(db, USERS_COL));
   return snap.empty;
+}
+
+/**
+ * Global Cascading Erasure: Atomically erases all timetable periods and assignments
+ * for a specific teacher-class pairing across Firestore, and updates the staff's assigned_class_ids.
+ */
+export async function removeStaffClassCloud(
+  staffId: number,
+  classId: number,
+  updatedAssignedClassIds?: number[]
+): Promise<{ deletedEntryIds: number[]; deletedAssignmentIds: number[] }> {
+  const deletedEntryIds: number[] = [];
+  const deletedAssignmentIds: number[] = [];
+
+  try {
+    const batch = writeBatch(db);
+
+    // 1. Erase all timetable entries for this teacher + class
+    const entriesSnap = await getDocs(collection(db, ENTRIES_COL));
+    entriesSnap.forEach((d) => {
+      const data = d.data();
+      if (
+        Number(data.staff_id) === Number(staffId) &&
+        Number(data.class_id) === Number(classId)
+      ) {
+        deletedEntryIds.push(Number(d.id));
+        batch.delete(d.ref);
+      }
+    });
+
+    // 2. Erase staff assignments for this teacher + class
+    const asgnSnap = await getDocs(collection(db, ASSIGNMENTS_COL));
+    asgnSnap.forEach((d) => {
+      const data = d.data();
+      if (
+        Number(data.staff_id) === Number(staffId) &&
+        Number(data.class_id) === Number(classId)
+      ) {
+        deletedAssignmentIds.push(Number(d.id));
+        batch.delete(d.ref);
+      }
+    });
+
+    // 3. Update staff doc if updatedAssignedClassIds provided
+    if (updatedAssignedClassIds) {
+      const staffDocRef = doc(db, STAFF_COL, String(staffId));
+      batch.update(staffDocRef, {
+        assigned_class_ids: updatedAssignedClassIds,
+      });
+    }
+
+    await batch.commit();
+    return { deletedEntryIds, deletedAssignmentIds };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${STAFF_COL}/${staffId}/classes/${classId}`);
+    return { deletedEntryIds, deletedAssignmentIds };
+  }
 }
