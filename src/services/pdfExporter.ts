@@ -13,17 +13,17 @@ export class PDFTimetableExporter {
       case 2:
         return "09:50 - 10:30";
       case 3:
-        return "10:30 - 10:50";
+        return "10:45 - 11:25";
       case 4:
-        return "11:00 - 11:40";
+        return "11:25 - 12:05";
       case 5:
-        return "11:40 - 12:20";
+        return "12:50 - 13:30";
       case 6:
-        return "13:00 - 13:40";
+        return "13:30 - 14:10";
       case 7:
-        return "13:40 - 14:20";
+        return "14:20 - 15:00";
       case 8:
-        return "14:30 - 15:10";
+        return "15:00 - 15:40";
       default:
         return `Period ${p}`;
     }
@@ -51,42 +51,44 @@ export class PDFTimetableExporter {
 
     const rowsHtml = Array.from({ length: timings.total_periods }, (_, i) => i + 1)
       .map((p) => {
-        // Morning Break
+        let breakRowHtml = "";
+
+        // Morning Break: rendered before Period 3 (between Period 2 and Period 3)
         if (p === 3) {
-          return `
+          breakRowHtml = `
             <tr style="background-color: #fef3c7; border: 1px solid #fde68a;">
-              <td style="padding: 6px 10px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 11px; text-align: center; white-space: nowrap;">
-                10:50 - 11:00
+              <td style="padding: 3px 6px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 9.5px; text-align: center; white-space: nowrap;">
+                10:30 - 10:45
               </td>
-              <td colspan="${activeDays.length}" style="padding: 6px 10px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 11px; letter-spacing: 0.5px;">
-                ☕ MORNING BREAK (10 MINUTES)
+              <td colspan="${activeDays.length}" style="padding: 3px 6px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 9.5px; letter-spacing: 0.5px;">
+                ☕ MORNING BREAK (15 MINUTES)
               </td>
             </tr>
           `;
         }
 
-        // Lunch Break
+        // Lunch Break: rendered before Period 5 (between Period 4 and Period 5)
         if (p === 5) {
-          return `
+          breakRowHtml = `
             <tr style="background-color: #ffedd5; border: 1px solid #fed7aa;">
-              <td style="padding: 6px 10px; border: 1px solid #fed7aa; font-weight: 700; color: #9a3412; font-size: 11px; text-align: center; white-space: nowrap;">
-                12:20 - 13:00
+              <td style="padding: 3px 6px; border: 1px solid #fed7aa; font-weight: 700; color: #9a3412; font-size: 9.5px; text-align: center; white-space: nowrap;">
+                12:05 - 12:50
               </td>
-              <td colspan="${activeDays.length}" style="padding: 6px 10px; border: 1px solid #fed7aa; text-align: center; font-weight: 700; color: #c2410c; font-size: 11px; letter-spacing: 0.5px;">
-                🍱 LUNCH BREAK (40 MINUTES)
+              <td colspan="${activeDays.length}" style="padding: 3px 6px; border: 1px solid #fed7aa; text-align: center; font-weight: 700; color: #c2410c; font-size: 9.5px; letter-spacing: 0.5px;">
+                🍱 LUNCH BREAK (45 MINUTES)
               </td>
             </tr>
           `;
         }
 
-        // Afternoon Break
+        // Afternoon Break: rendered before Period 7 (between Period 6 and Period 7)
         if (p === 7) {
-          return `
+          breakRowHtml = `
             <tr style="background-color: #fef3c7; border: 1px solid #fde68a;">
-              <td style="padding: 6px 10px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 11px; text-align: center; white-space: nowrap;">
-                14:50 - 15:00
+              <td style="padding: 3px 6px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 9.5px; text-align: center; white-space: nowrap;">
+                14:10 - 14:20
               </td>
-              <td colspan="${activeDays.length}" style="padding: 6px 10px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 11px; letter-spacing: 0.5px;">
+              <td colspan="${activeDays.length}" style="padding: 3px 6px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 9.5px; letter-spacing: 0.5px;">
                 ☕ AFTERNOON BREAK (10 MINUTES)
               </td>
             </tr>
@@ -95,7 +97,7 @@ export class PDFTimetableExporter {
 
         const periodTime = this.getPeriodTime(p);
 
-        // Teaching period row
+        // Teaching period row (preserves all periods 1 through 8)
         const dayCells = activeDays
           .map((day) => {
             const entry = classEntries.find((e) => e.day === day && e.period === p);
@@ -105,22 +107,22 @@ export class PDFTimetableExporter {
               const color = subject?.color || "#3b82f6";
 
               return `
-                <td style="padding: 6px; border: 1px solid #cbd5e1; vertical-align: top; background-color: #ffffff;">
-                  <div style="background-color: ${color}12; border: 1px solid ${color}45; border-radius: 6px; padding: 6px 8px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
-                      <span style="background-color: ${color}; color: #ffffff; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; text-transform: uppercase;">
+                <td style="padding: 3px 4px; border: 1px solid #cbd5e1; vertical-align: top; background-color: #ffffff;">
+                  <div style="background-color: ${color}12; border: 1px solid ${color}45; border-radius: 4px; padding: 4px 6px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                      <span style="background-color: ${color}; color: #ffffff; font-size: 8px; font-weight: 700; padding: 0.5px 4px; border-radius: 3px; text-transform: uppercase;">
                         ${subject?.code || "SUB"}
                       </span>
                       ${
                         entry.room_number
-                          ? `<span style="font-size: 9px; font-weight: 600; color: #64748b;">Rm: ${entry.room_number}</span>`
+                          ? `<span style="font-size: 8px; font-weight: 600; color: #64748b;">Rm: ${entry.room_number}</span>`
                           : ""
                       }
                     </div>
-                    <div style="font-size: 11px; font-weight: 700; color: #0f172a; line-height: 1.2; margin-top: 2px;">
+                    <div style="font-size: 9.5px; font-weight: 700; color: #0f172a; line-height: 1.15; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                       ${subject?.name || "Subject"}
                     </div>
-                    <div style="font-size: 10px; color: #475569; margin-top: 3px; font-weight: 500;">
+                    <div style="font-size: 8.5px; color: #475569; margin-top: 2px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                       👨‍🏫 ${staff?.name || "Faculty"}
                     </div>
                   </div>
@@ -129,8 +131,8 @@ export class PDFTimetableExporter {
             }
 
             return `
-              <td style="padding: 6px; border: 1px solid #cbd5e1; vertical-align: middle; background-color: #fafafa; text-align: center;">
-                <div style="border: 1px dashed #cbd5e1; border-radius: 6px; padding: 12px 4px; color: #94a3b8; font-size: 10px; font-weight: 600;">
+              <td style="padding: 3px 4px; border: 1px solid #cbd5e1; vertical-align: middle; background-color: #fafafa; text-align: center;">
+                <div style="border: 1px dashed #cbd5e1; border-radius: 4px; padding: 8px 3px; color: #94a3b8; font-size: 9px; font-weight: 600;">
                   FREE
                 </div>
               </td>
@@ -138,46 +140,48 @@ export class PDFTimetableExporter {
           })
           .join("");
 
-        return `
+        const periodRowHtml = `
           <tr style="border: 1px solid #cbd5e1;">
-            <td style="padding: 8px; border: 1px solid #cbd5e1; background-color: #f8fafc; text-align: center; vertical-align: middle;">
-              <div style="font-weight: 700; font-size: 12px; color: #1e293b;">Period ${p}</div>
-              <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${periodTime}</div>
+            <td style="padding: 4px 5px; border: 1px solid #cbd5e1; background-color: #f8fafc; text-align: center; vertical-align: middle;">
+              <div style="font-weight: 700; font-size: 10.5px; color: #1e293b;">Period ${p}</div>
+              <div style="font-size: 8.5px; color: #64748b; margin-top: 1px;">${periodTime}</div>
             </td>
             ${dayCells}
           </tr>
         `;
+
+        return breakRowHtml + periodRowHtml;
       })
       .join("");
 
     return `
-      <div style="width: 1060px; padding: 24px 30px; background-color: #ffffff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box;">
+      <div style="width: 1060px; padding: 18px 24px; background-color: #ffffff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box;">
         <!-- Official School Header -->
-        <div style="border-bottom: 2px solid #2563eb; padding-bottom: 14px; margin-bottom: 16px;">
+        <div style="border-bottom: 2px solid #2563eb; padding-bottom: 10px; margin-bottom: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
-              <div style="font-size: 22px; font-weight: 800; color: #1e3a8a; letter-spacing: -0.3px;">
+              <div style="font-size: 20px; font-weight: 800; color: #1e3a8a; letter-spacing: -0.3px;">
                 ${timings.school_name}
               </div>
-              <div style="font-size: 13px; font-weight: 600; color: #2563eb; margin-top: 2px;">
+              <div style="font-size: 12px; font-weight: 600; color: #2563eb; margin-top: 2px;">
                 Academic Year: ${timings.academic_year}
               </div>
-              <div style="font-size: 17px; font-weight: 700; color: #0f172a; margin-top: 8px;">
+              <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 6px;">
                 CLASS TIMETABLE: ${cls.name}
               </div>
-              <div style="font-size: 12px; color: #475569; margin-top: 2px;">
+              <div style="font-size: 11px; color: #475569; margin-top: 2px;">
                 Grade ${cls.grade} • Section ${cls.section} • Room: ${cls.room_number || "Not assigned"} • ${classEntries.length} Scheduled Lessons/Week
               </div>
             </div>
 
             <div style="text-align: right;">
-              <div style="display: inline-block; background-color: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+              <div style="display: inline-block; background-color: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8; padding: 3px 8px; border-radius: 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
                 Official Schedule Document
               </div>
-              <div style="font-size: 11px; color: #64748b; margin-top: 6px;">
+              <div style="font-size: 10px; color: #64748b; margin-top: 4px;">
                 Issued: ${today}
               </div>
-              <div style="font-size: 11px; color: #16a34a; font-weight: 600; margin-top: 2px;">
+              <div style="font-size: 10px; color: #16a34a; font-weight: 600; margin-top: 2px;">
                 ✓ Constraint Verified & Conflict-Free
               </div>
             </div>
@@ -185,16 +189,16 @@ export class PDFTimetableExporter {
         </div>
 
         <!-- Timetable Grid -->
-        <table style="width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 16px;">
+        <table style="width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px;">
           <thead>
             <tr style="background-color: #f1f5f9; border: 1px solid #cbd5e1;">
-              <th style="width: 130px; padding: 10px 8px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; font-weight: 700; color: #334155; text-transform: uppercase;">
+              <th style="width: 110px; padding: 6px 6px; border: 1px solid #cbd5e1; text-align: center; font-size: 10.5px; font-weight: 700; color: #334155; text-transform: uppercase;">
                 Period / Time
               </th>
               ${activeDays
                 .map(
                   (d) => `
-                <th style="padding: 10px 8px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; font-weight: 700; color: #334155; text-transform: uppercase;">
+                <th style="padding: 6px 6px; border: 1px solid #cbd5e1; text-align: center; font-size: 10.5px; font-weight: 700; color: #334155; text-transform: uppercase;">
                   ${d}
                 </th>
               `
@@ -208,7 +212,7 @@ export class PDFTimetableExporter {
         </table>
 
         <!-- Document Footer -->
-        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 10px; font-size: 10px; color: #64748b;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 6px; font-size: 9.5px; color: #64748b;">
           <div>
             ${timings.school_name} • Operational Hours: ${timings.start_time} - ${timings.end_time} • Period Duration: ${timings.period_duration_minutes} Mins
           </div>
@@ -248,42 +252,44 @@ export class PDFTimetableExporter {
 
     const rowsHtml = Array.from({ length: timings.total_periods }, (_, i) => i + 1)
       .map((p) => {
-        // Morning Break
+        let breakRowHtml = "";
+
+        // Morning Break: rendered before Period 3 (between Period 2 and Period 3)
         if (p === 3) {
-          return `
+          breakRowHtml = `
             <tr style="background-color: #fef3c7; border: 1px solid #fde68a;">
-              <td style="padding: 6px 10px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 11px; text-align: center; white-space: nowrap;">
-                10:50 - 11:00
+              <td style="padding: 3px 6px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 9.5px; text-align: center; white-space: nowrap;">
+                10:30 - 10:45
               </td>
-              <td colspan="${activeDays.length}" style="padding: 6px 10px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 11px; letter-spacing: 0.5px;">
-                ☕ MORNING BREAK (10 MINUTES)
+              <td colspan="${activeDays.length}" style="padding: 3px 6px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 9.5px; letter-spacing: 0.5px;">
+                ☕ MORNING BREAK (15 MINUTES)
               </td>
             </tr>
           `;
         }
 
-        // Lunch Break
+        // Lunch Break: rendered before Period 5 (between Period 4 and Period 5)
         if (p === 5) {
-          return `
+          breakRowHtml = `
             <tr style="background-color: #ffedd5; border: 1px solid #fed7aa;">
-              <td style="padding: 6px 10px; border: 1px solid #fed7aa; font-weight: 700; color: #9a3412; font-size: 11px; text-align: center; white-space: nowrap;">
-                12:20 - 13:00
+              <td style="padding: 3px 6px; border: 1px solid #fed7aa; font-weight: 700; color: #9a3412; font-size: 9.5px; text-align: center; white-space: nowrap;">
+                12:05 - 12:50
               </td>
-              <td colspan="${activeDays.length}" style="padding: 6px 10px; border: 1px solid #fed7aa; text-align: center; font-weight: 700; color: #c2410c; font-size: 11px; letter-spacing: 0.5px;">
-                🍱 LUNCH BREAK (40 MINUTES)
+              <td colspan="${activeDays.length}" style="padding: 3px 6px; border: 1px solid #fed7aa; text-align: center; font-weight: 700; color: #c2410c; font-size: 9.5px; letter-spacing: 0.5px;">
+                🍱 LUNCH BREAK (45 MINUTES)
               </td>
             </tr>
           `;
         }
 
-        // Afternoon Break
+        // Afternoon Break: rendered before Period 7 (between Period 6 and Period 7)
         if (p === 7) {
-          return `
+          breakRowHtml = `
             <tr style="background-color: #fef3c7; border: 1px solid #fde68a;">
-              <td style="padding: 6px 10px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 11px; text-align: center; white-space: nowrap;">
-                14:50 - 15:00
+              <td style="padding: 3px 6px; border: 1px solid #fde68a; font-weight: 700; color: #92400e; font-size: 9.5px; text-align: center; white-space: nowrap;">
+                14:10 - 14:20
               </td>
-              <td colspan="${activeDays.length}" style="padding: 6px 10px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 11px; letter-spacing: 0.5px;">
+              <td colspan="${activeDays.length}" style="padding: 3px 6px; border: 1px solid #fde68a; text-align: center; font-weight: 700; color: #b45309; font-size: 9.5px; letter-spacing: 0.5px;">
                 ☕ AFTERNOON BREAK (10 MINUTES)
               </td>
             </tr>
@@ -292,7 +298,7 @@ export class PDFTimetableExporter {
 
         const periodTime = this.getPeriodTime(p);
 
-        // Teaching row
+        // Teaching row (preserves all periods 1 through 8)
         const dayCells = activeDays
           .map((day) => {
             const isUnavailable = (staff.unavailabilities || []).some(
@@ -304,10 +310,10 @@ export class PDFTimetableExporter {
                 (u) => u.day === day && u.period === p
               );
               return `
-                <td style="padding: 6px; border: 1px solid #cbd5e1; vertical-align: middle; background-color: #fff1f2;">
-                  <div style="border: 1px solid #fecdd3; border-radius: 6px; padding: 8px 4px; text-align: center;">
-                    <div style="font-size: 10px; font-weight: 700; color: #e11d48;">UNAVAILABLE</div>
-                    <div style="font-size: 9px; color: #fb7185; margin-top: 2px;">${unavail?.reason || "Blocked / Leave"}</div>
+                <td style="padding: 3px 4px; border: 1px solid #cbd5e1; vertical-align: middle; background-color: #fff1f2;">
+                  <div style="border: 1px solid #fecdd3; border-radius: 4px; padding: 6px 3px; text-align: center;">
+                    <div style="font-size: 9px; font-weight: 700; color: #e11d48;">UNAVAILABLE</div>
+                    <div style="font-size: 8px; color: #fb7185; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${unavail?.reason || "Blocked / Leave"}</div>
                   </div>
                 </td>
               `;
@@ -320,22 +326,22 @@ export class PDFTimetableExporter {
               const color = subject?.color || "#10b981";
 
               return `
-                <td style="padding: 6px; border: 1px solid #cbd5e1; vertical-align: top; background-color: #ffffff;">
-                  <div style="background-color: ${color}12; border: 1px solid ${color}45; border-radius: 6px; padding: 6px 8px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px;">
-                      <span style="background-color: #1e293b; color: #ffffff; font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px;">
+                <td style="padding: 3px 4px; border: 1px solid #cbd5e1; vertical-align: top; background-color: #ffffff;">
+                  <div style="background-color: ${color}12; border: 1px solid ${color}45; border-radius: 4px; padding: 4px 6px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                      <span style="background-color: #1e293b; color: #ffffff; font-size: 8px; font-weight: 700; padding: 0.5px 4px; border-radius: 3px;">
                         ${cls?.name || "Class"}
                       </span>
                       ${
                         entry.room_number
-                          ? `<span style="font-size: 9px; font-weight: 600; color: #64748b;">Rm: ${entry.room_number}</span>`
+                          ? `<span style="font-size: 8px; font-weight: 600; color: #64748b;">Rm: ${entry.room_number}</span>`
                           : ""
                       }
                     </div>
-                    <div style="font-size: 11px; font-weight: 700; color: #0f172a; line-height: 1.2; margin-top: 2px;">
+                    <div style="font-size: 9.5px; font-weight: 700; color: #0f172a; line-height: 1.15; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                       ${subject?.name || "Subject"}
                     </div>
-                    <div style="font-size: 9px; font-weight: 600; color: ${color}; margin-top: 3px;">
+                    <div style="font-size: 8.5px; font-weight: 600; color: ${color}; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                       ${subject?.code || ""}
                     </div>
                   </div>
@@ -344,8 +350,8 @@ export class PDFTimetableExporter {
             }
 
             return `
-              <td style="padding: 6px; border: 1px solid #cbd5e1; vertical-align: middle; background-color: #fafafa; text-align: center;">
-                <div style="border: 1px dashed #cbd5e1; border-radius: 6px; padding: 12px 4px; color: #64748b; font-size: 10px; font-weight: 600;">
+              <td style="padding: 3px 4px; border: 1px solid #cbd5e1; vertical-align: middle; background-color: #fafafa; text-align: center;">
+                <div style="border: 1px dashed #cbd5e1; border-radius: 4px; padding: 8px 3px; color: #64748b; font-size: 9px; font-weight: 600;">
                   FREE / PREP
                 </div>
               </td>
@@ -353,46 +359,48 @@ export class PDFTimetableExporter {
           })
           .join("");
 
-        return `
+        const periodRowHtml = `
           <tr style="border: 1px solid #cbd5e1;">
-            <td style="padding: 8px; border: 1px solid #cbd5e1; background-color: #f8fafc; text-align: center; vertical-align: middle;">
-              <div style="font-weight: 700; font-size: 12px; color: #1e293b;">Period ${p}</div>
-              <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${periodTime}</div>
+            <td style="padding: 4px 5px; border: 1px solid #cbd5e1; background-color: #f8fafc; text-align: center; vertical-align: middle;">
+              <div style="font-weight: 700; font-size: 10.5px; color: #1e293b;">Period ${p}</div>
+              <div style="font-size: 8.5px; color: #64748b; margin-top: 1px;">${periodTime}</div>
             </td>
             ${dayCells}
           </tr>
         `;
+
+        return breakRowHtml + periodRowHtml;
       })
       .join("");
 
     return `
-      <div style="width: 1060px; padding: 24px 30px; background-color: #ffffff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box;">
+      <div style="width: 1060px; padding: 18px 24px; background-color: #ffffff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-sizing: border-box;">
         <!-- Official School Header -->
-        <div style="border-bottom: 2px solid #059669; padding-bottom: 14px; margin-bottom: 16px;">
+        <div style="border-bottom: 2px solid #059669; padding-bottom: 10px; margin-bottom: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
-              <div style="font-size: 22px; font-weight: 800; color: #064e3b; letter-spacing: -0.3px;">
+              <div style="font-size: 20px; font-weight: 800; color: #064e3b; letter-spacing: -0.3px;">
                 ${timings.school_name}
               </div>
-              <div style="font-size: 13px; font-weight: 600; color: #059669; margin-top: 2px;">
+              <div style="font-size: 12px; font-weight: 600; color: #059669; margin-top: 2px;">
                 Academic Year: ${timings.academic_year}
               </div>
-              <div style="font-size: 17px; font-weight: 700; color: #0f172a; margin-top: 8px;">
+              <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-top: 6px;">
                 STAFF TEACHING TIMETABLE: ${staff.name}
               </div>
-              <div style="font-size: 12px; color: #475569; margin-top: 2px;">
+              <div style="font-size: 11px; color: #475569; margin-top: 2px;">
                 ID: ${staff.employee_id || "N/A"} • Qualifications: ${qualifications} • Workload: ${staffEntries.length} / ${staff.max_periods_per_week} Periods/Week
               </div>
             </div>
 
             <div style="text-align: right;">
-              <div style="display: inline-block; background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
+              <div style="display: inline-block; background-color: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; padding: 3px 8px; border-radius: 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
                 Faculty Schedule Document
               </div>
-              <div style="font-size: 11px; color: #64748b; margin-top: 6px;">
+              <div style="font-size: 10px; color: #64748b; margin-top: 4px;">
                 Issued: ${today}
               </div>
-              <div style="font-size: 11px; color: #16a34a; font-weight: 600; margin-top: 2px;">
+              <div style="font-size: 10px; color: #16a34a; font-weight: 600; margin-top: 2px;">
                 ✓ Workload Compliant
               </div>
             </div>
@@ -400,16 +408,16 @@ export class PDFTimetableExporter {
         </div>
 
         <!-- Timetable Grid -->
-        <table style="width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 16px;">
+        <table style="width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px;">
           <thead>
             <tr style="background-color: #f1f5f9; border: 1px solid #cbd5e1;">
-              <th style="width: 130px; padding: 10px 8px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; font-weight: 700; color: #334155; text-transform: uppercase;">
+              <th style="width: 110px; padding: 6px 6px; border: 1px solid #cbd5e1; text-align: center; font-size: 10.5px; font-weight: 700; color: #334155; text-transform: uppercase;">
                 Period / Time
               </th>
               ${activeDays
                 .map(
                   (d) => `
-                <th style="padding: 10px 8px; border: 1px solid #cbd5e1; text-align: center; font-size: 12px; font-weight: 700; color: #334155; text-transform: uppercase;">
+                <th style="padding: 6px 6px; border: 1px solid #cbd5e1; text-align: center; font-size: 10.5px; font-weight: 700; color: #334155; text-transform: uppercase;">
                   ${d}
                 </th>
               `
@@ -423,7 +431,7 @@ export class PDFTimetableExporter {
         </table>
 
         <!-- Document Footer -->
-        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 10px; font-size: 10px; color: #64748b;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #e2e8f0; padding-top: 6px; font-size: 9.5px; color: #64748b;">
           <div>
             ${timings.school_name} • Operational Hours: ${timings.start_time} - ${timings.end_time} • Max Daily Limit: ${staff.max_periods_per_day} Periods
           </div>
