@@ -20,9 +20,11 @@ from app.models import (
     School,
     StaffAvailability,
     StaffSubject,
+    StaffAssignment,
     ClassSubject,
 )
 from app.schemas import (
+    TimetableEntryCreate,
     TimetableEntryRead,
     TimetableEntryUpdate,
     GenerationRequest,
@@ -239,6 +241,199 @@ def update_timetable_entry(entry_id: int, payload: TimetableEntryUpdate, db: Ses
     db.commit()
     db.refresh(entry)
     return _to_read_schema(entry)
+
+
+@router.post("/assign", response_model=TimetableEntryRead, status_code=status.HTTP_200_OK)
+def assign_timetable_slot(payload: TimetableEntryCreate, db: Session = Depends(get_db)):
+    """
+    Inline Period Assignment on Click:
+    Assigns or updates the subject and teacher for a specific Day and Period in a Class.
+    If a slot already exists for (class_id, day, period), updates subject and staff.
+    If it's an open slot, creates a new entry.
+    """
+    entry = db.query(TimetableEntry).filter(
+        TimetableEntry.class_id == payload.class_id,
+        TimetableEntry.day == payload.day,
+        TimetableEntry.period == payload.period
+    ).first()
+
+    if entry:
+        entry.subject_id = payload.subject_id
+        entry.staff_id = payload.staff_id
+        if payload.room_number is not None:
+            entry.room_number = payload.room_number
+    else:
+        room = payload.room_number
+        if not room:
+            classroom = db.query(ClassRoom).filter(ClassRoom.id == payload.class_id).first()
+            room = classroom.room_number if classroom else ""
+
+        entry = TimetableEntry(
+            day=payload.day,
+            period=payload.period,
+            class_id=payload.class_id,
+            subject_id=payload.subject_id,
+            staff_id=payload.staff_id,
+            room_number=room
+        )
+        db.add(entry)
+
+    db.commit()
+    db.refresh(entry)
+    return _to_read_schema(entry)
+
+
+@router.get("/eligible-staff")
+def get_eligible_staff(
+    subject_id: int,
+    day: str,
+    period: int,
+    class_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Returns staff filtered for a specific subject, annotated with real-time conflict status:
+    - has_conflict: True if staff is already teaching another class or marked unavailable for (day, period)
+    - conflict_reason: Description of the conflict (e.g. "Teaching in Class 10-A", "Marked unavailable")
+    - conflicting_class_id: ID of the occupied class
+    """
+    # Find staff qualified for this subject or assigned to it
+    qualified_staff_ids = {
+        s.staff_id for s in db.query(StaffSubject).filter(StaffSubject.subject_id == subject_id).all()
+    }
+    assigned_staff_ids = {
+        a.staff_id for a in db.query(StaffAssignment).filter(StaffAssignment.subject_id == subject_id).all()
+    }
+    target_staff_ids = qualified_staff_ids.union(assigned_staff_ids)
+
+    # Fallback to all staff if none explicitly mapped so user is never blocked
+    if target_staff_ids:
+        staff_records = db.query(Staff).filter(Staff.id.in_(target_staff_ids)).all()
+    else:
+        staff_records = db.query(Staff).all()
+
+    # Query entries for this day and period
+    active_entries = db.query(TimetableEntry).filter(
+        TimetableEntry.day == day,
+        TimetableEntry.period == period
+    ).all()
+
+    # Query unavailabilities for this day and period
+    unavailabilities = db.query(StaffAvailability).filter(
+        StaffAvailability.day == day,
+        StaffAvailability.period == period,
+        StaffAvailability.is_available == False
+    ).all()
+    unavailable_staff_map = {u.staff_id: u.reason or "Marked unavailable" for u in unavailabilities}
+
+    # Query classes for friendly names
+    classes_map = {c.id: c.name for c in db.query(ClassRoom).all()}
+
+    results = []
+    for st in staff_records:
+        conflict_entry = next(
+            (e for e in active_entries if e.staff_id == st.id and (class_id is None or e.class_id != class_id)),
+            None
+        )
+        has_conflict = False
+        conflict_reason = None
+        conflicting_class_id = None
+
+        if conflict_entry:
+            has_conflict = True
+            c_name = classes_map.get(conflict_entry.class_id, f"Class #{conflict_entry.class_id}")
+            conflict_reason = f"Already assigned to {c_name} in Period {period}"
+            conflicting_class_id = conflict_entry.class_id
+        elif st.id in unavailable_staff_map:
+            has_conflict = True
+            conflict_reason = unavailable_staff_map[st.id]
+
+        results.append({
+            "id": st.id,
+            "name": st.name,
+            "employee_id": st.employee_id,
+            "has_conflict": has_conflict,
+            "conflict_reason": conflict_reason,
+            "conflicting_class_id": conflicting_class_id,
+            "is_qualified": st.id in qualified_staff_ids or st.id in assigned_staff_ids,
+        })
+
+    # Sort: non-conflicting first, then alphabetically
+    results.sort(key=lambda x: (x["has_conflict"], x["name"]))
+    return results
+
+
+@router.get("/free-periods")
+def get_free_periods(db: Session = Depends(get_db)):
+    """
+    Maps out every period across the entire week and returns lists of completely
+    unassigned staff members grouped by day and period.
+    """
+    school_days = db.query(SchoolDay).filter(SchoolDay.is_active == True).order_by(SchoolDay.day_order).all()
+    if school_days:
+        days = [d.day_name for d in school_days]
+    else:
+        days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+    school = db.query(School).first()
+    total_periods = school.total_periods if school else 8
+
+    all_staff = db.query(Staff).all()
+    staff_dict = {
+        s.id: {
+            "id": s.id,
+            "name": s.name,
+            "employee_id": s.employee_id,
+            "email": s.email,
+        }
+        for s in all_staff
+    }
+
+    # All booked entries
+    entries = db.query(TimetableEntry).all()
+    busy_map = {}
+    for e in entries:
+        key = (e.day, e.period)
+        if key not in busy_map:
+            busy_map[key] = set()
+        busy_map[key].add(e.staff_id)
+
+    # Unavailability set per (day, period)
+    unavailabilities = db.query(StaffAvailability).filter(StaffAvailability.is_available == False).all()
+    unavail_map = {}
+    for u in unavailabilities:
+        key = (u.day, u.period)
+        if key not in unavail_map:
+            unavail_map[key] = set()
+        unavail_map[key].add(u.staff_id)
+
+    schedule = {}
+    for day in days:
+        schedule[day] = {}
+        for p in range(1, total_periods + 1):
+            busy_staff_ids = busy_map.get((day, p), set())
+            unavail_staff_ids = unavail_map.get((day, p), set())
+            excluded_ids = busy_staff_ids.union(unavail_staff_ids)
+
+            free_staff = [
+                staff_dict[s.id]
+                for s in all_staff
+                if s.id not in excluded_ids
+            ]
+            free_staff.sort(key=lambda x: x["name"])
+            schedule[day][p] = {
+                "period": p,
+                "free_count": len(free_staff),
+                "occupied_count": len(all_staff) - len(free_staff),
+                "free_staff": free_staff,
+            }
+
+    return {
+        "days": days,
+        "total_periods": total_periods,
+        "total_staff_count": len(all_staff),
+        "schedule": schedule,
+    }
 
 
 @router.delete("/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)

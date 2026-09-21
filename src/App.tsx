@@ -44,6 +44,8 @@ import {
   saveTimetableEntriesCloud,
   saveSingleTimetableEntryCloud,
   deleteTimetableEntryCloud,
+  saveAssignmentCloud,
+  deleteAssignmentCloud,
   swapOrMoveTimetableEntriesCloud,
   moveTimetableSlotTransactionCloud,
   getUserProfile,
@@ -59,11 +61,15 @@ import { FirestoreRulesModal } from "./components/FirestoreRulesModal";
 import { DashboardView } from "./components/DashboardView";
 import { ClassTimetableView } from "./components/ClassTimetableView";
 import { StaffTimetableView } from "./components/StaffTimetableView";
+import { FreePeriodsView } from "./components/FreePeriodsView";
 import { ClassesView } from "./components/ClassesView";
 import { SubjectsView } from "./components/SubjectsView";
 import { StaffView } from "./components/StaffView";
 import { TimingsView } from "./components/TimingsView";
 import { ConflictCheckerView } from "./components/ConflictCheckerView";
+import { AssignmentsView } from "./components/AssignmentsView";
+import { AvailabilityView } from "./components/AvailabilityView";
+import { CodeViewerView } from "./components/CodeViewerView";
 
 // Modals
 import { GenerateModal } from "./components/GenerateModal";
@@ -546,6 +552,48 @@ export default function App() {
       }
     },
     []
+  );
+
+  // Inline Period Assignment on Click handler
+  const handleAssignPeriod = useCallback(
+    (classId: number, day: string, period: number, subjectId: number, staffId: number) => {
+      setEntries((prev) => {
+        const existingIndex = prev.findIndex(
+          (e) =>
+            Number(e.class_id) === Number(classId) &&
+            e.day === day &&
+            Number(e.period) === Number(period) &&
+            !e.is_docked
+        );
+        let updatedEntry: TimetableEntry;
+        let newEntries: TimetableEntry[];
+        if (existingIndex >= 0) {
+          updatedEntry = {
+            ...prev[existingIndex],
+            subject_id: subjectId,
+            staff_id: staffId,
+          };
+          newEntries = [...prev];
+          newEntries[existingIndex] = updatedEntry;
+        } else {
+          const currentClass = classes.find((c) => Number(c.id) === Number(classId));
+          updatedEntry = {
+            id: Date.now() + Math.floor(Math.random() * 1000),
+            class_id: classId,
+            day,
+            period,
+            subject_id: subjectId,
+            staff_id: staffId,
+            room_number: currentClass?.room_number || "",
+            is_docked: false,
+          };
+          newEntries = [...prev, updatedEntry];
+        }
+        saveSingleTimetableEntryCloud(updatedEntry);
+        return newEntries;
+      });
+    },
+    [classes]
   );
 
   // Regenerate single class
@@ -1199,12 +1247,14 @@ export default function App() {
                 subjects={subjects}
                 entries={entries}
                 timings={timings}
+                assignments={assignments}
                 onMoveEntry={handleMoveEntry}
                 onDeleteEntry={handleDeleteEntry}
                 onAddEntry={(entry) => {
                   setEntries((prev) => [...prev, entry]);
                   saveSingleTimetableEntryCloud(entry);
                 }}
+                onAssignSlot={handleAssignPeriod}
                 onRegenerateClass={handleRegenerateClass}
               />
             )}
@@ -1216,6 +1266,17 @@ export default function App() {
                 subjects={subjects}
                 entries={entries}
                 timings={timings}
+              />
+            )}
+
+            {currentTab === "free_periods" && (
+              <FreePeriodsView
+                staffList={staffList}
+                entries={entries}
+                timings={timings}
+                classes={classes}
+                subjects={subjects}
+                assignments={assignments}
               />
             )}
 

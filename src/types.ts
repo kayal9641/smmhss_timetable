@@ -128,7 +128,11 @@ export type NavigationTab =
   | "subjects"
   | "staff"
   | "timings"
-  | "conflicts";
+  | "conflicts"
+  | "free_periods"
+  | "assignments"
+  | "availability"
+  | "code_viewer";
 
 export type UserRole = "admin" | "staff";
 

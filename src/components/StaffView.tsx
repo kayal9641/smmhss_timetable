@@ -37,6 +37,7 @@ interface StaffViewProps {
   ) => void | Promise<void>;
   onDeleteStaff: (staffId: number) => void;
   onRemoveStaffClass?: (staffId: number, classId: number) => void | Promise<void>;
+  onNavigateToAvailability?: (staffId: number) => void;
 }
 
 const formatPeriodTime = (p: number, timings?: SchoolTimings): string => {

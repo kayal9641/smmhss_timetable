@@ -18,6 +18,7 @@ interface HeaderProps {
   conflicts: ConflictItem[];
   onOpenGenerate: () => void;
   onOpenAI: () => void;
+  onOpenCodeViewer?: () => void;
   isGenerating?: boolean;
   syncStatus: SyncStatus;
   currentUser: User | null;

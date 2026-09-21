@@ -8,6 +8,7 @@ import {
   Users,
   Clock,
   AlertOctagon,
+  Coffee,
 } from "lucide-react";
 import { NavigationTab, ConflictItem } from "../types";
 
@@ -34,6 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "class_timetable", label: "Class Timetable", icon: CalendarDays },
     { id: "staff_timetable", label: "Staff Timetable", icon: UserCheck },
+    { id: "free_periods", label: "Free Periods", icon: Coffee },
     { id: "classes", label: "Classes", icon: GraduationCap },
     { id: "subjects", label: "Subjects", icon: BookOpen },
     { id: "staff", label: "Staff Members", icon: Users },

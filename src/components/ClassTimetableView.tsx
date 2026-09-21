@@ -5,6 +5,7 @@ import {
   Subject,
   TimetableEntry,
   SchoolTimings,
+  StaffAssignment,
 } from "../types";
 import {
   Download,
@@ -37,6 +38,7 @@ interface ClassTimetableViewProps {
   subjects: Subject[];
   entries: TimetableEntry[];
   timings: SchoolTimings;
+  assignments?: StaffAssignment[];
   onMoveEntry: (
     entryId: number,
     newDay: string,
@@ -45,6 +47,13 @@ interface ClassTimetableViewProps {
   ) => Promise<{ success: boolean; error?: string }> | { success: boolean; error?: string };
   onDeleteEntry?: (entryId: number) => void;
   onAddEntry?: (entry: TimetableEntry) => void;
+  onAssignSlot?: (
+    classId: number,
+    day: string,
+    period: number,
+    subjectId: number,
+    staffId: number
+  ) => void;
   onRegenerateClass: (classId: number) => void;
 }
 
@@ -54,9 +63,11 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   subjects,
   entries,
   timings,
+  assignments = [],
   onMoveEntry,
   onDeleteEntry,
   onAddEntry,
+  onAssignSlot,
   onRegenerateClass,
 }) => {
   const [selectedClassId, setSelectedClassId] = useState<number>(classes[0]?.id || 1);
@@ -76,6 +87,14 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
   const [isAddDockOpen, setIsAddDockOpen] = useState<boolean>(false);
   const [dockSubjectId, setDockSubjectId] = useState<number>(subjects[0]?.id || 1);
   const [dockStaffId, setDockStaffId] = useState<number>(staffList[0]?.id || 1);
+
+  // Inline Period Assignment Popover state
+  const [activeSlotPopover, setActiveSlotPopover] = useState<{
+    day: string;
+    period: number;
+    subjectId: number;
+    staffId: number;
+  } | null>(null);
 
   // PDF Export States
   const [isExportingPdf, setIsExportingPdf] = useState<boolean>(false);
@@ -114,6 +133,59 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
       return Number(e.class_id) === Number(selectedClassId);
     });
   }, [entries, selectedClassId]);
+
+  // Dynamically filter staff members assigned/qualified to teach the selected subject
+  const eligibleStaffForActiveSlot = React.useMemo(() => {
+    if (!activeSlotPopover) return staffList;
+    const subjId = activeSlotPopover.subjectId;
+    const filtered = staffList.filter((st) => {
+      const isQualified = st.qualified_subject_ids?.includes(subjId);
+      const isAssigned = assignments.some(
+        (a) => Number(a.staff_id) === Number(st.id) && Number(a.subject_id) === Number(subjId)
+      );
+      return isQualified || isAssigned;
+    });
+    return filtered.length > 0 ? filtered : staffList;
+  }, [activeSlotPopover?.subjectId, staffList, assignments]);
+
+  // Real-time conflict lookup for staff in the current slot
+  const staffConflictMap = React.useMemo(() => {
+    if (!activeSlotPopover) return new Map<number, string>();
+    const { day, period } = activeSlotPopover;
+    const map = new Map<number, string>();
+
+    staffList.forEach((st) => {
+      // 1. Conflict: already teaching another class during this identical Day and Period
+      const busyEntry = entries.find(
+        (e) =>
+          e.day === day &&
+          Number(e.period) === Number(period) &&
+          Number(e.staff_id) === Number(st.id) &&
+          Number(e.class_id) !== Number(selectedClassId) &&
+          !e.is_docked &&
+          e.day !== "DOCK" &&
+          Number(e.period) !== 0
+      );
+      if (busyEntry) {
+        const busyClass = classes.find((c) => Number(c.id) === Number(busyEntry.class_id));
+        map.set(
+          st.id,
+          `Busy in ${busyClass ? busyClass.name : `Class #${busyEntry.class_id}`}`
+        );
+        return;
+      }
+
+      // 2. Unavailability flag
+      const unavail = st.unavailabilities?.find(
+        (u) => u.day === day && Number(u.period) === Number(period)
+      );
+      if (unavail) {
+        map.set(st.id, unavail.reason || "Marked unavailable");
+      }
+    });
+
+    return map;
+  }, [activeSlotPopover?.day, activeSlotPopover?.period, staffList, entries, selectedClassId, classes]);
 
   if (classes.length === 0) {
     return (
@@ -365,6 +437,52 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
     setIsAddDockOpen(false);
     setMoveToast(`✓ Added extra class to Holding Dock`);
     setTimeout(() => setMoveToast(null), 3000);
+  };
+
+  // Inline slot assignment confirmation handler
+  const handleConfirmInlineAssignment = (day: string, period: number) => {
+    if (!activeSlotPopover) return;
+    const { subjectId, staffId } = activeSlotPopover;
+
+    if (onAssignSlot) {
+      onAssignSlot(selectedClassId, day, period, subjectId, staffId);
+    } else {
+      const existing = entries.find(
+        (e) =>
+          Number(e.class_id) === Number(selectedClassId) &&
+          e.day === day &&
+          Number(e.period) === Number(period) &&
+          !e.is_docked
+      );
+      if (existing) {
+        if (onAddEntry) {
+          onAddEntry({
+            ...existing,
+            subject_id: subjectId,
+            staff_id: staffId,
+          });
+        }
+      } else if (onAddEntry) {
+        onAddEntry({
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          class_id: selectedClassId,
+          day,
+          period,
+          subject_id: subjectId,
+          staff_id: staffId,
+          room_number: selectedClass?.room_number || "",
+          is_docked: false,
+        });
+      }
+    }
+
+    const assignedSubject = subjectMap.get(subjectId);
+    const assignedStaff = staffMap.get(staffId);
+    setMoveToast(
+      `✓ Assigned ${assignedSubject?.name || "Subject"} (${assignedStaff?.name || "Teacher"}) on ${day} Period ${period}`
+    );
+    setTimeout(() => setMoveToast(null), 3000);
+    setActiveSlotPopover(null);
   };
 
   return (
@@ -654,6 +772,8 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                       ) : null;
 
                       const isSlotHovered = dragOverSlot?.day === day && dragOverSlot?.period === p;
+                      const isCurrentSlotPopoverOpen =
+                        activeSlotPopover?.day === day && activeSlotPopover?.period === p;
 
                       return (
                         <td
@@ -671,7 +791,7 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                             }
                           }}
                           onDrop={(e) => handleDropOnSlot(e, day, p)}
-                          className={`p-2 border-r border-slate-200 last:border-r-0 align-top min-w-[140px] transition-colors ${
+                          className={`relative p-2 border-r border-slate-200 last:border-r-0 align-top min-w-[140px] transition-colors ${
                             isSlotHovered
                               ? entry
                                 ? "bg-amber-100/60 ring-2 ring-inset ring-amber-400"
@@ -684,8 +804,16 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                               draggable={true}
                               onDragStart={(e) => handleDragStart(e, entry)}
                               onDragEnd={handleDragEnd}
-                              onClick={() => handleOpenMove(entry)}
-                              className={`group relative cursor-grab active:cursor-grabbing rounded-xl p-2.5 border shadow-2xs transition-all hover:scale-[1.02] hover:shadow-xs ${
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveSlotPopover({
+                                  day,
+                                  period: p,
+                                  subjectId: entry.subject_id,
+                                  staffId: entry.staff_id,
+                                });
+                              }}
+                              className={`group relative cursor-pointer rounded-xl p-2.5 border shadow-2xs transition-all hover:scale-[1.02] hover:shadow-xs ${
                                 draggedEntry?.id === entry.id ? "opacity-40 ring-2 ring-blue-500" : ""
                               }`}
                               style={{
@@ -711,7 +839,16 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                                   >
                                     <Archive className="h-3 w-3" />
                                   </button>
-                                  <Move className="h-3 w-3 text-slate-400 opacity-60 group-hover:opacity-100" />
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenMove(entry);
+                                    }}
+                                    title="Move lesson"
+                                    className="p-0.5 text-slate-400 opacity-60 group-hover:opacity-100 hover:text-blue-600"
+                                  >
+                                    <Move className="h-3 w-3" />
+                                  </button>
                                 </div>
                               </div>
 
@@ -741,7 +878,16 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                             </div>
                           ) : (
                             <div
-                              className={`h-16 flex items-center justify-center rounded-lg border text-[11px] transition-all ${
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveSlotPopover({
+                                  day,
+                                  period: p,
+                                  subjectId: subjects[0]?.id || 1,
+                                  staffId: staffList[0]?.id || 1,
+                                });
+                              }}
+                              className={`h-16 flex items-center justify-center rounded-lg border text-[11px] cursor-pointer hover:border-blue-400 hover:bg-blue-50/40 hover:text-blue-600 transition-all ${
                                 isSlotHovered
                                   ? "border-blue-400 bg-blue-50/70 text-blue-600 font-semibold"
                                   : "border-dashed border-slate-200 text-slate-300"
@@ -749,6 +895,146 @@ export const ClassTimetableView: React.FC<ClassTimetableViewProps> = ({
                             >
                               {isSlotHovered ? "Drop to Place" : "Open"}
                             </div>
+                          )}
+
+                          {/* Inline Period Assignment Popover on Click */}
+                          {isCurrentSlotPopoverOpen && (
+                            <>
+                              <div
+                                className="fixed inset-0 z-40"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveSlotPopover(null);
+                                }}
+                              />
+                              <div
+                                onClick={(e) => e.stopPropagation()}
+                                className="absolute left-1 top-1 z-50 w-56 rounded-xl bg-white p-3 shadow-2xl border-2 border-blue-500 ring-4 ring-blue-500/10 text-left"
+                              >
+                                <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-100">
+                                  <div className="text-[11px] font-bold text-slate-900 flex items-center space-x-1.5">
+                                    <Sparkles className="h-3 w-3 text-blue-600" />
+                                    <span>Assign {day} · P{p}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setActiveSlotPopover(null)}
+                                    className="text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+
+                                <div className="space-y-2.5">
+                                  <div>
+                                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                      Subject
+                                    </label>
+                                    <select
+                                      value={activeSlotPopover.subjectId}
+                                      onChange={(e) => {
+                                        const newSubjId = Number(e.target.value);
+                                        const eligible = staffList.filter((st) => {
+                                          const isQual = st.qualified_subject_ids?.includes(newSubjId);
+                                          const isAsgn = assignments.some(
+                                            (a) =>
+                                              Number(a.staff_id) === Number(st.id) &&
+                                              Number(a.subject_id) === Number(newSubjId)
+                                          );
+                                          return isQual || isAsgn;
+                                        });
+                                        const fallback = eligible.length > 0 ? eligible : staffList;
+                                        const isCurrentEligible = fallback.some((s) => s.id === activeSlotPopover.staffId);
+                                        setActiveSlotPopover((prev) =>
+                                          prev
+                                            ? {
+                                                ...prev,
+                                                subjectId: newSubjId,
+                                                staffId: isCurrentEligible ? prev.staffId : (fallback[0]?.id || prev.staffId),
+                                              }
+                                            : null
+                                        );
+                                      }}
+                                      className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-800 focus:bg-white focus:border-blue-500 focus:outline-none cursor-pointer"
+                                    >
+                                      {subjects.map((sub) => (
+                                        <option key={sub.id} value={sub.id}>
+                                          {sub.name} ({sub.code || sub.name.slice(0, 4)})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                        Teacher (Staff)
+                                      </label>
+                                      <span className="text-[9px] text-slate-400 font-medium">
+                                        {eligibleStaffForActiveSlot.length} eligible
+                                      </span>
+                                    </div>
+                                    <select
+                                      value={activeSlotPopover.staffId}
+                                      onChange={(e) =>
+                                        setActiveSlotPopover((prev) =>
+                                          prev ? { ...prev, staffId: Number(e.target.value) } : null
+                                        )
+                                      }
+                                      className={`w-full rounded-lg border px-2.5 py-1.5 text-xs focus:bg-white focus:outline-none cursor-pointer transition-colors ${
+                                        staffConflictMap.has(activeSlotPopover.staffId)
+                                          ? "border-rose-400 bg-rose-50/70 text-rose-900 font-medium focus:border-rose-500"
+                                          : "border-slate-200 bg-slate-50 text-slate-800 font-medium focus:border-blue-500"
+                                      }`}
+                                    >
+                                      {eligibleStaffForActiveSlot.map((st) => {
+                                        const conflictText = staffConflictMap.get(st.id);
+                                        return (
+                                          <option
+                                            key={st.id}
+                                            value={st.id}
+                                            className={conflictText ? "text-rose-600 font-bold bg-rose-50" : "text-slate-800"}
+                                          >
+                                            {conflictText
+                                              ? `⚠️ ${st.name} (${conflictText})`
+                                              : st.name}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+
+                                    {/* Real-time conflict intimation alert */}
+                                    {staffConflictMap.has(activeSlotPopover.staffId) && (
+                                      <div className="mt-1.5 rounded-lg bg-rose-50 border border-rose-200 p-2 text-[10px] text-rose-800 flex items-start space-x-1.5 leading-tight">
+                                        <AlertTriangle className="h-3.5 w-3.5 text-rose-600 shrink-0 mt-0.5" />
+                                        <div>
+                                          <span className="font-bold text-rose-900">Conflict Detected:</span>{" "}
+                                          {staffConflictMap.get(activeSlotPopover.staffId)}.
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-100">
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveSlotPopover(null)}
+                                      className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleConfirmInlineAssignment(day, p)}
+                                      className="inline-flex items-center space-x-1 rounded-lg bg-blue-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-blue-700 shadow-xs cursor-pointer"
+                                    >
+                                      <Check className="h-3 w-3" />
+                                      <span>Save</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </>
                           )}
                         </td>
                       );
