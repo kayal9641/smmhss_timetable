@@ -1,1 +1,258 @@
 @import "tailwindcss";
+
+/* ==========================================================================
+   PRINT STYLESHEET (PDF & BROWSER PRINT FIXES)
+   Targeted for single-page landscape packing of Class & Staff Timetables
+   ========================================================================== */
+
+@media print {
+  /* 1. Landscape & Single-Page Force */
+  @page {
+    size: landscape;
+    margin: 5mm;
+  }
+
+  html,
+  body {
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    overflow: hidden !important; /* Eliminates blank secondary page spill */
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Reset outer application frame constraints & height locks */
+  #root,
+  .h-screen,
+  .overflow-hidden,
+  .overflow-y-auto,
+  main,
+  main > div,
+  .max-w-7xl {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    display: block !important;
+  }
+
+  /* 2. Hide Non-Print Elements */
+  #app-sidebar,
+  aside,
+  #app-header,
+  header,
+  #firestore-permission-banner,
+  #holding-dock-container,
+  button,
+  .no-print,
+  [role="dialog"],
+  [aria-modal="true"],
+  .toast-container,
+  [id^="btn-"],
+  [class*="conflict-badge"],
+  .border-amber-200.bg-amber-50\/70,
+  /* Hide selector rows & action bars */
+  .space-y-5 > div:first-child,
+  .space-y-6 > div:first-child,
+  /* Hide drag guidance inside class banner */
+  .bg-blue-50\/70 > div:last-child,
+  /* Hide interactive popovers and hover action controls */
+  .absolute.z-50,
+  [title="Send to Extra Classes Holding Dock"],
+  [title="Move lesson"],
+  [title="Delete lesson"] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Hide stats cards on staff view to guarantee single-page vertical fit */
+  .grid.grid-cols-2.sm\:grid-cols-4 {
+    display: none !important;
+  }
+
+  /* Compact printable header for Class Details */
+  .bg-blue-50\/70,
+  .border-blue-200\/70 {
+    background-color: #f8fafc !important;
+    border: 1px solid #cbd5e1 !important;
+    padding: 3px 8px !important;
+    margin-bottom: 4px !important;
+    border-radius: 4px !important;
+  }
+
+  /* 3. Prevent Column Clipping & Full-Width Grid Tracking */
+  #class-timetable-grid,
+  #staff-timetable-grid,
+  .overflow-x-auto {
+    overflow: visible !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border: 1px solid #94a3b8 !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  #class-timetable-grid table,
+  #staff-timetable-grid table {
+    width: 100% !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+    margin: 0 !important;
+  }
+
+  /* Explicit column width tracking: Period / Time column */
+  #class-timetable-grid th:first-child,
+  #class-timetable-grid td:first-child,
+  #staff-timetable-grid th:first-child,
+  #staff-timetable-grid td:first-child {
+    width: 11% !important;
+    min-width: 0 !important;
+    max-width: 11% !important;
+    padding: 3px 4px !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+    border-right: 1px solid #cbd5e1 !important;
+    background-color: #f8fafc !important;
+  }
+
+  /* Distribute all active day columns equally across the remaining 89% width */
+  #class-timetable-grid th:not(:first-child),
+  #class-timetable-grid td:not(:first-child),
+  #staff-timetable-grid th:not(:first-child),
+  #staff-timetable-grid td:not(:first-child) {
+    width: auto !important;
+    min-width: 0 !important;
+    padding: 2px 3px !important;
+    border-right: 1px solid #cbd5e1 !important;
+  }
+
+  #class-timetable-grid th:last-child,
+  #class-timetable-grid td:last-child,
+  #staff-timetable-grid th:last-child,
+  #staff-timetable-grid td:last-child {
+    border-right: none !important;
+  }
+
+  /* 4. Typography & Layout Packing */
+  #class-timetable-grid th,
+  #staff-timetable-grid th {
+    font-size: 9.5px !important;
+    font-weight: 700 !important;
+    padding: 3px 4px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.025em !important;
+    background-color: #f1f5f9 !important;
+    color: #1e293b !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+    white-space: nowrap !important;
+    line-height: 1.2 !important;
+  }
+
+  #class-timetable-grid td,
+  #staff-timetable-grid td {
+    padding: 2px 3px !important;
+    font-size: 9px !important;
+    line-height: 1.2 !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    vertical-align: middle !important;
+    min-width: 0 !important;
+  }
+
+  /* Cards inside timetable slots */
+  #class-timetable-grid .group,
+  #staff-timetable-grid .group,
+  #class-timetable-grid td > div,
+  #staff-timetable-grid td > div {
+    padding: 2px 4px !important;
+    margin: 0 !important;
+    border-radius: 3px !important;
+    box-shadow: none !important;
+    border-width: 1px !important;
+  }
+
+  /* Prevent text wrapping & keep clean ellipsis for long subject/staff names */
+  #class-timetable-grid .truncate,
+  #staff-timetable-grid .truncate,
+  #class-timetable-grid .font-bold,
+  #staff-timetable-grid .font-bold {
+    font-size: 9px !important;
+    line-height: 1.15 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  #class-timetable-grid .text-slate-600,
+  #class-timetable-grid .text-slate-500,
+  #staff-timetable-grid .text-slate-500 {
+    font-size: 8px !important;
+    line-height: 1.1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  /* Subject Badge & Pill scaling */
+  #class-timetable-grid span[style*="backgroundColor"],
+  #staff-timetable-grid span[style*="backgroundColor"] {
+    font-size: 7.5px !important;
+    padding: 0.5px 3px !important;
+    border-radius: 2px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+
+  /* Break & Lunch intervals: slim, high-contrast rows */
+  tr[class*="bg-amber-50"],
+  tr[class*="bg-orange-50"] {
+    height: 16px !important;
+    background-color: #f8fafc !important;
+  }
+
+  tr[class*="bg-amber-50"] td,
+  tr[class*="bg-orange-50"] td {
+    padding: 1px 4px !important;
+    font-size: 8px !important;
+    font-weight: 700 !important;
+    line-height: 1.1 !important;
+    white-space: nowrap !important;
+    border-top: 1px solid #cbd5e1 !important;
+    border-bottom: 1px solid #cbd5e1 !important;
+  }
+
+  /* Staff FREE period indicator packing */
+  #staff-timetable-grid .bg-emerald-50\/50 {
+    padding: 2px 1px !important;
+    border-radius: 3px !important;
+  }
+  #staff-timetable-grid .bg-emerald-50\/50 span {
+    font-size: 8px !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+
+  /* Prevent page breaks across all table elements */
+  table,
+  thead,
+  tbody,
+  tr,
+  td,
+  th {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}
+
